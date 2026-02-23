@@ -231,14 +231,26 @@ def salvar_registro(dados: dict) -> None:
             "proteinas":        dados["Proteinas"],
             "gorduras":         dados["Gorduras"],
         }
-        (
+        # Converter tipos numpy/pandas para tipos nativos Python (JSON serializable)
+        import numpy as np
+        def _to_native(v):
+            if isinstance(v, (np.integer,)):  return int(v)
+            if isinstance(v, (np.floating,)): return float(v)
+            if isinstance(v, (np.bool_,)):    return bool(v)
+            return v
+        payload = {k: _to_native(v) for k, v in payload.items()}
+
+        res = (
             _client()
             .table("registros_atleta")
             .upsert(payload, on_conflict="user_id,data")
             .execute()
         )
+        st.session_state["debug_payload"] = payload
+        st.session_state["debug_resposta"] = str(res)
     except Exception as e:
-        st.error(f"Erro ao salvar registro: {e}")
+        st.session_state["debug_erro"] = str(e)
+        st.session_state["debug_traceback"] = __import__("traceback").format_exc()
 
 
 def deletar_registro(data_str: str) -> None:
@@ -278,6 +290,24 @@ def render_app():
     # ─────────────────────────────────────────────────────────────────────────
     # TABELA CRUD
     # ─────────────────────────────────────────────────────────────────────────
+
+    # ── Painel de debug persistente ──────────────────────────────────────────
+    if "debug_erro" in st.session_state:
+        st.error("❌ **ERRO AO SALVAR:**")
+        st.code(st.session_state["debug_erro"])
+        st.code(st.session_state.get("debug_traceback", ""))
+        if st.button("Limpar debug"):
+            del st.session_state["debug_erro"]
+            st.rerun()
+    elif "debug_resposta" in st.session_state:
+        st.success("✅ **SALVO COM SUCESSO**")
+        with st.expander("🔍 Ver payload e resposta"):
+            st.write("**Payload enviado:**", st.session_state["debug_payload"])
+            st.code(st.session_state["debug_resposta"])
+        if st.button("Limpar debug"):
+            del st.session_state["debug_resposta"]
+            del st.session_state["debug_payload"]
+            st.rerun()
 
     st.subheader("💾 Histórico Diário de Registros")
     st.caption("Clique em uma linha para pré-carregar os dados na barra lateral (modo edição).")
