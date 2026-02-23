@@ -13,11 +13,10 @@ v3.0 — Adicionado:
 
 import math
 import random
-from datetime import datetime, date, timedelta
-from typing import Dict, Tuple, List, Optional, Any
-from dataclasses import dataclass, field
+from datetime import date
+from typing import Dict, Tuple, List, Optional
+from dataclasses import dataclass
 import pandas as pd
-import numpy as np
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DATACLASS PRINCIPAL
