@@ -13,9 +13,9 @@ v3.0 — Adicionado:
 
 import math
 import random
-from datetime import date
-from typing import Dict, Tuple, List, Optional
-from dataclasses import dataclass
+from datetime import datetime, date, timedelta
+from typing import Dict, Tuple, List, Optional, Any
+from dataclasses import dataclass, field
 import pandas as pd
 
 # ─────────────────────────────────────────────────────────────────────────────
