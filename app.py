@@ -126,31 +126,25 @@ def render_tela_auth():
     st.caption("Todas as recomendações são baseadas em literatura científica peer-reviewed.")
     st.divider()
 
-    col_esq, col_dir = st.columns([1, 1], gap="large")
+    aba_login, aba_cadastro = st.tabs(["🔐 Entrar", "📝 Criar conta"])
 
-    with col_esq:
-        st.subheader("🔐 Entrar na sua conta")
-        with st.form("form_login"):
-            email_login = st.text_input("E-mail", placeholder="seu@email.com")
-            senha_login = st.text_input("Senha", type="password", placeholder="••••••••")
-            btn_login = st.form_submit_button("Entrar", type="primary", use_container_width=True)
-
-        if btn_login:
+    with aba_login:
+        st.markdown("### Entre na sua conta")
+        email_login = st.text_input("E-mail", placeholder="seu@email.com", key="login_email")
+        senha_login = st.text_input("Senha", type="password", placeholder="••••••••", key="login_senha")
+        if st.button("Entrar", type="primary", use_container_width=True, key="btn_login"):
             if email_login and senha_login:
                 if fazer_login(email_login, senha_login):
                     st.rerun()
             else:
                 st.warning("Preencha e-mail e senha.")
 
-    with col_dir:
-        st.subheader("📝 Criar conta gratuita")
-        with st.form("form_cadastro"):
-            email_cad = st.text_input("E-mail", placeholder="seu@email.com", key="email_cad")
-            senha_cad = st.text_input("Senha", type="password", placeholder="Mínimo 6 caracteres", key="senha_cad")
-            senha_cad2 = st.text_input("Confirmar senha", type="password", placeholder="Repita a senha", key="senha_cad2")
-            btn_cad = st.form_submit_button("Criar conta", use_container_width=True)
-
-        if btn_cad:
+    with aba_cadastro:
+        st.markdown("### Criar conta gratuita")
+        email_cad  = st.text_input("E-mail", placeholder="seu@email.com", key="cad_email")
+        senha_cad  = st.text_input("Senha", type="password", placeholder="Mínimo 6 caracteres", key="cad_senha")
+        senha_cad2 = st.text_input("Confirmar senha", type="password", placeholder="Repita a senha", key="cad_senha2")
+        if st.button("Criar conta", use_container_width=True, key="btn_cadastro"):
             if not email_cad or not senha_cad:
                 st.warning("Preencha todos os campos.")
             elif senha_cad != senha_cad2:
@@ -174,7 +168,6 @@ COLUNAS_SUPABASE = [
     "calorias", "carboidratos", "proteinas", "gorduras",
 ]
 
-# snake_case (Supabase) → PascalCase (código interno)
 RENAME_MAP = {
     "data": "Data", "peso": "Peso", "bf_atual": "BF_Atual",
     "carga_treino": "Carga_Treino", "vfc_atual": "VFC_Atual",
