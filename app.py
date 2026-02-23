@@ -185,14 +185,19 @@ RENAME_MAP = {
 }
 
 
+def _client():
+    """Retorna cliente Supabase autenticado com o token da sessão atual."""
+    token = get_access_token()
+    supabase.postgrest.auth(token)
+    return supabase
+
+
 def carregar_registros() -> pd.DataFrame:
     """Carrega apenas os registros do usuário logado (RLS garante isolamento)."""
     try:
-        token = get_access_token()
         res = (
-            supabase.postgrest
-            .auth(token)
-            .from_("registros_atleta")
+            _client()
+            .table("registros_atleta")
             .select(",".join(COLUNAS_SUPABASE))
             .order("data", desc=False)
             .execute()
@@ -209,7 +214,6 @@ def carregar_registros() -> pd.DataFrame:
 def salvar_registro(dados: dict) -> None:
     """Upsert: insere ou atualiza registro do dia para o usuário logado."""
     try:
-        token = get_access_token()
         payload = {
             "user_id":          get_user_id(),
             "data":             dados["Data"],
@@ -228,9 +232,8 @@ def salvar_registro(dados: dict) -> None:
             "gorduras":         dados["Gorduras"],
         }
         (
-            supabase.postgrest
-            .auth(token)
-            .from_("registros_atleta")
+            _client()
+            .table("registros_atleta")
             .upsert(payload, on_conflict="user_id,data")
             .execute()
         )
@@ -241,11 +244,9 @@ def salvar_registro(dados: dict) -> None:
 def deletar_registro(data_str: str) -> None:
     """Deleta o registro do dia do usuário logado."""
     try:
-        token = get_access_token()
         (
-            supabase.postgrest
-            .auth(token)
-            .from_("registros_atleta")
+            _client()
+            .table("registros_atleta")
             .delete()
             .eq("user_id", get_user_id())
             .eq("data", data_str)
