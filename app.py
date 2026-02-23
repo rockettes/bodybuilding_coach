@@ -46,7 +46,7 @@ st.set_page_config(
     page_title="Pro Coach IA",
     page_icon="🧬",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -154,93 +154,87 @@ def calcular_idade(data_nasc_str: str) -> int:
         return 0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REGISTROS DIÁRIOS — Supabase
+# CRUD — medidas_atleta (tabela unificada de todos os registros)
 # ─────────────────────────────────────────────────────────────────────────────
 
-COLS_SB = [
-    "data","peso","bf_atual","carga_treino","vfc_atual","sleep_score",
-    "recovery_time","fc_repouso","fase_historica","estrategia_dieta",
-    "calorias","carboidratos","proteinas","gorduras",
-]
-RENAME = {
-    "data":"Data","peso":"Peso","bf_atual":"BF_Atual","carga_treino":"Carga_Treino",
-    "vfc_atual":"VFC_Atual","sleep_score":"Sleep_Score","recovery_time":"Recovery_Time",
-    "fc_repouso":"FC_Repouso","fase_historica":"Fase_Historica",
-    "estrategia_dieta":"Estrategia_Dieta","calorias":"Calorias",
-    "carboidratos":"Carboidratos","proteinas":"Proteinas","gorduras":"Gorduras",
-}
-
-def carregar_registros() -> pd.DataFrame:
+def carregar_todos_registros() -> pd.DataFrame:
+    """Carrega todos os registros de medidas_atleta do usuário."""
     try:
-        res = _client().table("registros_atleta").select(",".join(COLS_SB)).order("data").execute()
-        if res.data:
-            return pd.DataFrame(res.data).rename(columns=RENAME)
-        return pd.DataFrame(columns=list(RENAME.values()))
+        res = _client().table("medidas_atleta").select("*") \
+            .eq("user_id", get_uid()).order("data", desc=True).execute()
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
     except Exception as e:
-        st.error(f"Erro ao carregar registros: {e}")
-        return pd.DataFrame(columns=list(RENAME.values()))
+        st.warning(f"Erro ao carregar registros: {e}")
+        return pd.DataFrame()
 
-def salvar_registro(dados: dict) -> None:
+
+def carregar_ultimo_registro() -> dict:
+    """Retorna o registro mais recente (com cache de sessão)."""
+    if "ultimo_registro_cache" in st.session_state:
+        return st.session_state["ultimo_registro_cache"]
     try:
-        payload = _clean({
-            "user_id": get_uid(),
-            "data": dados["Data"], "peso": dados["Peso"], "bf_atual": dados["BF_Atual"],
-            "carga_treino": dados["Carga_Treino"], "vfc_atual": dados["VFC_Atual"],
-            "sleep_score": dados["Sleep_Score"], "recovery_time": dados["Recovery_Time"],
-            "fc_repouso": dados["FC_Repouso"], "fase_historica": dados["Fase_Historica"],
-            "estrategia_dieta": dados["Estrategia_Dieta"], "calorias": dados["Calorias"],
-            "carboidratos": dados["Carboidratos"], "proteinas": dados["Proteinas"],
-            "gorduras": dados["Gorduras"],
-        })
-        _client().table("registros_atleta").upsert(payload, on_conflict="user_id,data").execute()
+        res = _client().table("medidas_atleta").select("*") \
+            .eq("user_id", get_uid()).order("data", desc=True).limit(1).execute()
+        r = res.data[0] if res.data else {}
+        st.session_state["ultimo_registro_cache"] = r
+        return r
+    except:
+        return {}
+
+
+def salvar_novo_registro(dados: dict) -> None:
+    """Insere novo registro em medidas_atleta."""
+    try:
+        payload = _clean({**dados, "user_id": get_uid()})
+        _client().table("medidas_atleta").insert(payload).execute()
+        for k in ["ultimo_registro_cache","ultima_medida"]:
+            st.session_state.pop(k, None)
         st.toast("✅ Registro salvo!", icon="💾")
     except Exception as e:
         st.error(f"Erro ao salvar: {e}")
 
-def deletar_registro(data_str: str) -> None:
+
+def atualizar_registro(record_id: str, dados: dict) -> None:
+    """Atualiza registro existente em medidas_atleta pelo ID."""
     try:
-        _client().table("registros_atleta").delete().eq("user_id", get_uid()).eq("data", data_str).execute()
+        payload = _clean(dados)
+        payload.pop("user_id", None)
+        payload.pop("id", None)
+        _client().table("medidas_atleta").update(payload) \
+            .eq("id", record_id).eq("user_id", get_uid()).execute()
+        for k in ["ultimo_registro_cache","ultima_medida"]:
+            st.session_state.pop(k, None)
+        st.toast("✅ Registro atualizado!", icon="✏️")
+    except Exception as e:
+        st.error(f"Erro ao atualizar: {e}")
+
+
+def deletar_registro_unificado(record_id: str) -> None:
+    """Deleta registro de medidas_atleta pelo ID."""
+    try:
+        _client().table("medidas_atleta").delete() \
+            .eq("id", record_id).eq("user_id", get_uid()).execute()
+        for k in ["ultimo_registro_cache","ultima_medida"]:
+            st.session_state.pop(k, None)
         st.toast("🗑️ Registro deletado.")
     except Exception as e:
         st.error(f"Erro ao deletar: {e}")
 
 
-# ─── Medidas Semanais ─────────────────────────────────────────────────────────
+# Compatibilidade retroativa (usadas em partes não refatoradas ainda)
+def carregar_registros() -> pd.DataFrame:
+    df = carregar_todos_registros()
+    if df.empty:
+        return pd.DataFrame()
+    rename = {
+        "data":"Data","peso":"Peso","bf_final":"BF_Atual","carga_treino":"Carga_Treino",
+        "vfc_noturna":"VFC_Atual","sleep_score":"Sleep_Score","recovery_time":"Recovery_Time",
+        "fc_repouso":"FC_Repouso",
+    }
+    return df.rename(columns={k:v for k,v in rename.items() if k in df.columns})
 
 def carregar_ultima_medida_semanal() -> dict:
-    """Retorna o registro mais recente de medidas_atleta do usuário."""
-    if "ultima_medida" in st.session_state:
-        return st.session_state["ultima_medida"]
-    try:
-        res = _client().table("medidas_atleta").select("*") \
-            .eq("user_id", get_uid()).order("data", desc=True).limit(1).execute()
-        m = res.data[0] if res.data else {}
-        st.session_state["ultima_medida"] = m
-        return m
-    except Exception:
-        return {}
-
-
-def salvar_medida_semanal(dados: dict) -> None:
-    try:
-        payload = _clean({**dados, "user_id": get_uid()})
-        _client().table("medidas_atleta").insert(payload).execute()
-        st.toast("✅ Medidas salvas!", icon="📏")
-        if "ultima_medida" in st.session_state:
-            del st.session_state["ultima_medida"]
-    except Exception as e:
-        st.error(f"Erro ao salvar medidas: {e}")
-
-
-def deletar_medida_semanal(record_id: str) -> None:
-    try:
-        _client().table("medidas_atleta").delete() \
-            .eq("id", record_id).eq("user_id", get_uid()).execute()
-        st.toast("🗑️ Medida deletada.")
-        if "ultima_medida" in st.session_state:
-            del st.session_state["ultima_medida"]
-    except Exception as e:
-        st.error(f"Erro ao deletar: {e}")
+    return carregar_ultimo_registro()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -358,93 +352,24 @@ def render_onboarding():
             st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SIDEBAR — só dados diários de recuperação + perfil colapsável
+# TOPBAR — barra superior mínima (sem sidebar)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def render_sidebar(perfil: dict):
-    st.sidebar.markdown(f"### 👤 {perfil.get('nome','Atleta')}")
-    st.sidebar.caption(f"{st.session_state['user'].email}")
-    if st.sidebar.button("Sair", use_container_width=True):
-        fazer_logout()
+def render_topbar(perfil: dict) -> None:
+    """Barra superior: título + nome do usuário + botão de logout."""
+    col_t, col_u = st.columns([5, 1])
+    with col_t:
+        st.markdown(f"## 🧬 Pro Coach IA")
+    with col_u:
+        nome = perfil.get("nome","Atleta").split()[0]
+        st.markdown(f"**👤 {nome}**")
+        if st.button("Sair", use_container_width=True, key="topbar_logout"):
+            fazer_logout()
+    st.divider()
 
-    st.sidebar.divider()
 
-    # ── Perfil colapsável ─────────────────────────────────────────────────────
-    with st.sidebar.expander("⚙️ Perfil do Atleta", expanded=False):
-        nome_e      = st.text_input("Nome", value=perfil.get("nome",""), key="sb_nome")
-        dn_val      = datetime.strptime(str(perfil.get("data_nasc","1990-01-01")), "%Y-%m-%d").date()
-        data_nasc_e = st.date_input("Data de nascimento", value=dn_val, key="sb_nasc")
-        sexo_e      = st.radio("Sexo", ["Masculino","Feminino"],
-                        index=0 if perfil.get("sexo","Masculino")=="Masculino" else 1, key="sb_sexo")
-        altura_e    = st.number_input("Altura (cm)", value=float(perfil.get("altura",178)), key="sb_alt")
-        cat_opts    = ["Mens Physique","Classic Physique","Bodybuilding Open","Bikini","Wellness","Physique Feminino"]
-        cat_idx     = cat_opts.index(perfil.get("categoria","Mens Physique")) if perfil.get("categoria") in cat_opts else 0
-        cat_e       = st.selectbox("Categoria", cat_opts, index=cat_idx, key="sb_cat")
-        peds_e      = st.checkbox("Uso de PEDs", value=bool(perfil.get("uso_peds",False)), key="sb_peds")
-        bf_alvo_e   = st.number_input("% BF Alvo", value=float(perfil.get("bf_alvo",5.0)), step=0.5, key="sb_bf")
-        anos_e      = st.number_input("Anos de treino", value=int(perfil.get("anos_treino",5)), key="sb_anos")
-        dc_val      = datetime.strptime(str(perfil.get("data_competicao", str(date.today()+timedelta(days=120)))), "%Y-%m-%d").date()
-        data_comp_e = st.date_input("Data da competição", value=dc_val, key="sb_comp")
-        vfc_base_e  = st.number_input("VFC Baseline (ms)", value=float(perfil.get("vfc_baseline",60.0)), key="sb_vfc")
 
-        if st.button("💾 Atualizar Perfil", use_container_width=True, key="btn_perfil"):
-            salvar_perfil({
-                "nome": nome_e, "data_nasc": str(data_nasc_e), "sexo": sexo_e,
-                "altura": float(altura_e), "categoria": cat_e, "uso_peds": bool(peds_e),
-                "bf_alvo": float(bf_alvo_e), "anos_treino": int(anos_e),
-                "data_competicao": str(data_comp_e), "vfc_baseline": float(vfc_base_e),
-            })
-            st.rerun()
 
-        idade_calc = calcular_idade(str(data_nasc_e))
-        st.info(f"🎂 Idade atual: **{idade_calc} anos**")
-
-    st.sidebar.divider()
-
-    # ── Registro diário — SOMENTE dados de recuperação Garmin ────────────────
-    st.sidebar.header("📡 Registro Diário de Recuperação")
-    st.sidebar.caption("Peso, BF% e medidas → aba **Registros**")
-
-    # Pré-carregar valores se linha selecionada na tabela histórico
-    sel = st.session_state.get("linha_selecionada")
-    def_data  = datetime.strptime(str(sel["Data"]), "%Y-%m-%d").date() if sel else date.today()
-    def_carga = float(sel["Carga_Treino"]) if sel else 300.0
-    def_vfc   = float(sel["VFC_Atual"])    if sel else 60.0
-    def_sleep = int(sel["Sleep_Score"])    if sel else 75
-    def_rec   = int(sel["Recovery_Time"])  if sel else 24
-    def_fc    = int(sel["FC_Repouso"])     if sel else 55
-
-    # BUG FIX: não usar key fixa para data_reg quando há seleção —
-    # os widgets com key persistem o valor anterior no session_state.
-    # Forçar o valor correto via key única quando troca de row.
-    data_key = f"sb_data_reg_{str(def_data)}"
-    data_reg = st.sidebar.date_input("Data do Registro", value=def_data, key=data_key)
-
-    carga_tr  = st.sidebar.number_input("Volume Load (kg×reps)", value=def_carga, step=10.0, key="sb_carga")
-    vfc_at    = st.sidebar.number_input("VFC Noturna (ms)", value=def_vfc, step=1.0, key="sb_vfc_at")
-    sleep_sc  = st.sidebar.slider("Sleep Score", 0, 100, def_sleep, key="sb_sleep")
-    rec_time  = st.sidebar.number_input("Recovery Time (h)", value=def_rec, step=1, key="sb_rec")
-    fc_rep    = st.sidebar.number_input("FC Repouso (bpm)", value=def_fc, step=1, key="sb_fc")
-
-    # Perfil resolvido (prioriza widget se já foi aberto, caso contrário usa perfil salvo)
-    sexo     = st.session_state.get("sb_sexo",     perfil.get("sexo","Masculino"))
-    categoria= st.session_state.get("sb_cat",      perfil.get("categoria","Mens Physique"))
-    bf_alvo  = float(st.session_state.get("sb_bf", perfil.get("bf_alvo",5.0)))
-    data_comp= st.session_state.get("sb_comp",     dc_val)
-    uso_peds = bool(st.session_state.get("sb_peds",perfil.get("uso_peds",False)))
-    vfc_base = float(st.session_state.get("sb_vfc",perfil.get("vfc_baseline",60.0)))
-    idade    = calcular_idade(str(st.session_state.get("sb_nasc", dn_val)))
-    anos_tr  = int(st.session_state.get("sb_anos", perfil.get("anos_treino",5)))
-    altura   = float(st.session_state.get("sb_alt", perfil.get("altura",178.0)))
-
-    return {
-        "data_reg": data_reg,
-        "carga_tr": carga_tr, "vfc_at": vfc_at, "sleep_sc": sleep_sc,
-        "rec_time": rec_time, "fc_rep": fc_rep,
-        "sexo": sexo, "categoria": categoria, "bf_alvo": bf_alvo,
-        "data_comp": data_comp, "uso_peds": uso_peds, "vfc_base": vfc_base,
-        "idade": idade, "anos_treino": anos_tr, "altura": altura,
-    }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ABAS DO APP
@@ -453,49 +378,75 @@ def render_sidebar(perfil: dict):
 def tab_dashboard(p, atleta, flags, fase, df_hist, df_timeline, dieta_hoje, df_dieta):
     st.header("🏠 Dashboard do Dia")
 
-    # Métricas principais
+    # ── Métricas principais ───────────────────────────────────────────────────
     c1,c2,c3,c4,c5 = st.columns(5)
     c1.metric("Fase", fase)
     c2.metric("Dias p/ Show", f"{max(0,(p['data_comp']-date.today()).days)}d")
     taxa = f"{flags['taxa_perda_peso']:.2f}%/sem" if flags.get("taxa_perda_peso") else "—"
     c3.metric("Taxa Perda", taxa)
-    c4.metric("Peso Atual", f"{p['peso_at']} kg")
-    c5.metric("BF Atual", f"{p['bf_at']}%")
+    peso_txt = f"{p['peso_at']} kg" if p['peso_at'] else "— (sem registro)"
+    bf_txt   = f"{p['bf_at']}%"   if p['bf_at']   else "— (sem registro)"
+    c4.metric("Peso Atual", peso_txt)
+    c5.metric("BF Atual",   bf_txt)
 
     if flags.get("plato_metabolico"):
-        st.error("🚨 **PLATÔ METABÓLICO** — Taxa < 0.5%/sem por 2 semanas. Protocolo de quebra ativado. *(Peos et al., 2019)*")
+        st.error("🚨 **PLATÔ METABÓLICO** — Taxa < 0.5%/sem por 2 semanas. *(Peos et al., 2019)*")
 
     st.divider()
 
-    # Status de recuperação resumido
-    (status_dia, acao_dia, motivo_dia, painel,
-     acwr_val, acwr_status, cv_val, cv_status) = prescrever_treino_do_dia(atleta, df_hist)
+    col_rec, col_prop = st.columns([1, 1])
 
-    fn = st.error if "Severa" in status_dia else (st.warning if "Incompleta" in status_dia else st.success)
-    fn(f"**{status_dia}** — {acao_dia}")
-    st.caption(f"*{motivo_dia}*")
+    with col_rec:
+        # ── Status de recuperação ─────────────────────────────────────────────
+        st.subheader("🎯 Status de Recuperação")
+        (status_dia, acao_dia, motivo_dia, painel,
+         acwr_val, acwr_status, cv_val, cv_status) = prescrever_treino_do_dia(atleta, df_hist)
+        fn = st.error if "Severa" in status_dia else (st.warning if "Incompleta" in status_dia else st.success)
+        fn(f"**{status_dia}**")
+        st.info(f"**AÇÃO:** {acao_dia}")
+        st.caption(f"*{motivo_dia}*")
 
-    st.divider()
+        # ── Macros do dia ─────────────────────────────────────────────────────
+        st.divider()
+        st.subheader(f"🍽️ Alvo Nutricional — {dieta_hoje['Estratégia']}")
+        mc1,mc2,mc3,mc4 = st.columns(4)
+        mc1.metric("Calorias", f"{dieta_hoje['Calorias']} kcal")
+        mc2.metric("Proteína", f"{dieta_hoje['Prot(g)']}g")
+        mc3.metric("Carb", f"{dieta_hoje['Carb(g)']}g")
+        mc4.metric("Gordura", f"{dieta_hoje['Gord(g)']}g")
 
-    # Macros do dia
-    st.subheader(f"🍽️ Alvo Nutricional de Hoje — {dieta_hoje['Estratégia']}")
-    mc1,mc2,mc3,mc4 = st.columns(4)
-    mc1.metric("Calorias", f"{dieta_hoje['Calorias']} kcal")
-    mc2.metric("Proteína", f"{dieta_hoje['Prot(g)']}g")
-    mc3.metric("Carboidrato", f"{dieta_hoje['Carb(g)']}g")
-    mc4.metric("Gordura", f"{dieta_hoje['Gord(g)']}g")
-
-    st.divider()
-
-    # Histórico — tabela CRUD
-    st.subheader("💾 Histórico de Registros")
-    st.caption("Clique em uma linha para pré-carregar na sidebar (modo edição).")
-    df_disp = df_hist.sort_values("Data", ascending=False) if not df_hist.empty else df_hist
-    ev = st.dataframe(df_disp, on_select="rerun", selection_mode="single-row", use_container_width=True)
-    if not df_hist.empty and len(ev.selection.rows) > 0:
-        st.session_state["linha_selecionada"] = df_disp.iloc[ev.selection.rows[0]].to_dict()
-    else:
-        st.session_state["linha_selecionada"] = None
+    with col_prop:
+        # ── Proporções Estéticas ──────────────────────────────────────────────
+        st.subheader("📐 Proporções Estéticas")
+        ultimo = carregar_ultimo_registro()
+        medidas_d = {
+            "cintura":  float(ultimo.get("cintura") or 0),
+            "ombros":   float(ultimo.get("ombros")  or 0),
+            "peito":    float(ultimo.get("peito")   or 0),
+            "quadril":  float(ultimo.get("quadril") or 0),
+            "biceps_d": float(ultimo.get("biceps_d") or 0),
+            "coxa_d":   float(ultimo.get("coxa_d")  or 0),
+        }
+        altura_cm = float(p.get("altura") or 178.0)
+        if any(v > 0 for v in medidas_d.values()):
+            props = avaliar_proporcoes(p["categoria"], medidas_d, altura_cm)
+            prop_info = PROPORCOES_CATEGORIA.get(p["categoria"], {})
+            st.caption(f"*{prop_info.get('descricao','')}*")
+            if "ombro_cintura" in props:
+                r = props["ombro_cintura"]
+                prog = min(r["atual"] / r["alvo"], 1.0) if r["alvo"] > 0 else 0
+                st.progress(prog, text=f"Ombro/Cintura: {r['atual']:.3f} / φ {r['alvo']} — {r['status']}")
+                st.caption(r["rec"])
+            labels_prop = {
+                "cintura":"Cintura","ombro_cintura":"Ombro/Cintura",
+                "quadril_cintura":"Quadril/Cintura","peito_cintura":"Peito/Cintura",
+            }
+            for key, dados in props.items():
+                label = labels_prop.get(key, key)
+                alvo  = dados.get("alvo") or dados.get("alvo_max", "—")
+                st.write(f"{dados['status']} **{label}** — Atual: `{dados.get('atual','—')}` | Alvo: `{alvo}`")
+        else:
+            st.info("Registre circunferências na aba **📁 Registros** para ver as proporções aqui.")
 
 
 def tab_periodizacao(fase, df_timeline, flags, p, atleta, df_hist):
@@ -580,7 +531,10 @@ def tab_nutricao(fase, atleta, df_hist, flags, df_dieta, motivo_dieta, alertas, 
 
     with col_z:
         st.subheader("🏃 Zonas FC (Karvonen)")
-        zonas = calcular_zonas_karvonen(p["idade"], p["fc_rep"])
+        fc_rep_z = int(p.get("fc_rep") or 55)
+        if not p.get("fc_rep"):
+            st.caption("⚠️ FC Repouso não registrada — usando 55 bpm como referência. Registre na aba 📁 Registros.")
+        zonas = calcular_zonas_karvonen(int(p["idade"]), fc_rep_z)
         emj = {"Zona 1 (Recuperação Ativa)":"🔵","Zona 2 (LISS / Fat-Burning)":"🟢",
                "Zona 3 (Aeróbio Moderado)":"🟡","Zona 4 (Limiar Anaeróbio)":"🟠","Zona 5 (HIIT / Máximo)":"🔴"}
         for z,(mn,mx) in zonas.items():
@@ -693,6 +647,41 @@ sintetizar novas proteínas contráteis. O sistema rastreia isso via Volume Load
 def tab_recuperacao(atleta, df_hist, p):
     st.header("🎯 Recuperação e VFC")
 
+    # ── Verificar dados disponíveis ───────────────────────────────────────────
+    ultimo = carregar_ultimo_registro()
+    variaveis = {
+        "VFC Noturna (ms)":     float(ultimo.get("vfc_noturna")   or 0),
+        "Sleep Score":          float(ultimo.get("sleep_score")   or 0),
+        "Recovery Time (h)":    float(ultimo.get("recovery_time") or 0),
+        "FC Repouso (bpm)":     float(ultimo.get("fc_repouso")    or 0),
+        "Volume Load (treino)": float(ultimo.get("carga_treino")  or 0),
+    }
+    faltando = [k for k, v in variaveis.items() if v == 0]
+
+    if faltando:
+        with st.warning(f"⚠️ **Dados insuficientes para análise completa.** Preencha na aba 📁 Registros:"):
+            for f_ in faltando:
+                st.write(f"  • {f_}")
+
+    # Só exibe a análise se pelo menos VFC + sleep ou recovery existirem
+    tem_vfc  = variaveis["VFC Noturna (ms)"] > 0
+    tem_rec  = variaveis["Recovery Time (h)"] > 0 or variaveis["Sleep Score"] > 0
+
+    if not tem_vfc and not tem_rec:
+        st.info("Registre pelo menos **VFC Noturna** ou **Sleep Score + Recovery Time** para ver o status de recuperação.")
+        with st.expander("📖 Por que esses dados são importantes?"):
+            st.markdown("""
+**VFC (Variabilidade da Frequência Cardíaca)** reflete o equilíbrio do sistema nervoso autônomo.
+Uma queda de >10% em relação à baseline indica fadiga do SNC — não apenas muscular. *(Flatt & Esco, 2016)*
+
+**Sleep Score** quantifica a qualidade do sono, que é o principal fator de recuperação hormonal
+(GH liberado principalmente no sono profundo). *(Dattilo et al., 2011)*
+
+**Recovery Time** (Garmin) integra múltiplos parâmetros em uma estimativa de horas até
+a próxima sessão intensa. *(Flatt et al., 2018)*
+            """)
+        return
+
     (status_dia, acao_dia, motivo_dia, painel,
      acwr_val, acwr_status, cv_val, cv_status) = prescrever_treino_do_dia(atleta, df_hist)
 
@@ -719,6 +708,8 @@ def tab_recuperacao(atleta, df_hist, p):
             ))
             fig_g.update_layout(height=220, margin=dict(l=10,r=10,t=40,b=10))
             st.plotly_chart(fig_g, use_container_width=True)
+        else:
+            st.info("ACWR requer ≥ 7 registros com Volume Load.")
         st.caption(acwr_status)
 
     with col_c:
@@ -726,50 +717,51 @@ def tab_recuperacao(atleta, df_hist, p):
         if cv_val is not None:
             cor = "#E57373" if cv_val>10 else ("#FFD54F" if cv_val>7 else "#81C784")
             st.markdown(f"<h1 style='text-align:center;color:{cor}'>{cv_val}%</h1>", unsafe_allow_html=True)
+        else:
+            st.info("CV-VFC requer ≥ 7 registros com VFC.")
         st.caption(cv_status)
 
     st.divider()
     st.subheader("📖 Fundamentos Científicos da Recuperação")
 
     with st.expander("VFC como Indicador de Recuperação do SNC — Flatt & Esco (2016)", expanded=True):
-        vfc_b = p["vfc_base"]
-        vfc_a = p["vfc_at"]
-        delta = round(((vfc_a - vfc_b) / vfc_b) * 100, 1) if vfc_b > 0 else 0
-        cor_delta = "🟢" if delta >= -5 else ("🟡" if delta >= -10 else "🔴")
-        st.markdown(f"""
-**VFC Baseline:** {vfc_b} ms | **VFC Atual:** {vfc_a} ms | **Δ:** {cor_delta} {delta:+.1f}%
+        vfc_b = p.get("vfc_base",0)
+        vfc_a = p.get("vfc_at",0)
+        delta = round(((vfc_a - vfc_b) / vfc_b) * 100, 1) if vfc_b > 0 and vfc_a > 0 else None
+        if delta is not None:
+            cor_delta = "🟢" if delta >= -5 else ("🟡" if delta >= -10 else "🔴")
+            st.markdown(f"**VFC Baseline:** {vfc_b} ms | **VFC Atual:** {vfc_a} ms | **Δ:** {cor_delta} {delta:+.1f}%")
+        else:
+            st.markdown("*Configure VFC Baseline no Perfil e registre VFC Noturna para ver a análise.*")
+        st.markdown("""
+A VFC reflete o equilíbrio simpático/parassimpático. Quedas > 10% indicam fadiga autonômica do SNC.
 
-A Variabilidade da Frequência Cardíaca reflete o equilíbrio simpático/parassimpático.
-Quedas > 10% em relação à baseline indicam fadiga autonômica do SNC,
-não apenas fadiga muscular periférica.
+**Pontuação de fadiga (0-10 pontos):**
+- VFC < 10% abaixo da baseline → +2 pts / < 20% → +3 pts
+- Sleep Score < 60 → +2 pts | < 70 → +1 pt
+- Recovery Time > 48h → +2 pts | > 36h → +1 pt
+- ACWR > 1.5 → +1 pt / CV-VFC > 10% → +1 pt
 
-**Sistema de pontuação de fadiga (0-10 pontos):**
-- VFC < 10% abaixo da baseline → +2 pts
-- VFC < 20% abaixo da baseline → +3 pts
-- Sleep Score < 60 → +2 pts
-- Recovery Time > 72h → +2 pts
-- ACWR > 1.5 → +1 pt
-- CV-VFC > 10% → +1 pt
-
-**Decisão:** ≥5 pts = repouso total | 3-4 pts = cardio leve (Zona 2) | <3 pts = treinar
+**Decisão:** ≥5 pts = repouso total | 3-4 pts = Zona 2 | <3 pts = treinar normalmente
         """)
 
-    with st.expander("ACWR — Gabbett (2016) e Hulin et al. (2016)"):
+    with st.expander("ACWR — Gabbett (2016)"):
         st.markdown(f"""
 **Acute:Chronic Workload Ratio = Carga aguda (7d) ÷ Carga crônica (28d)**
 
 | Zona | ACWR | Interpretação |
 |---|---|---|
-| 🔵 Subtreino | < 0.8 | Carga insuficiente — risco de perda de adaptações |
+| 🔵 Subtreino | < 0.8 | Aumentar volume gradualmente |
 | 🟢 Ótimo | 0.8–1.3 | Zona segura de adaptação |
-| 🟡 Atenção | 1.3–1.5 | Monitorar sinais de overreaching |
-| 🔴 Perigo | > 1.5 | Alto risco de lesão e overtraining |
+| 🟡 Atenção | 1.3–1.5 | Monitorar overreaching |
+| 🔴 Perigo | > 1.5 | Alto risco de lesão |
 
 **ACWR atual: {f"{acwr_val:.2f}" if acwr_val else "dados insuficientes (mín. 7 registros)"}**
         """)
 
     with st.expander("📚 Referências — Recuperação"):
         _render_refs("Recuperação", card=True)
+
 
 
 def tab_suplementacao(atleta):
@@ -817,397 +809,521 @@ Especialmente útil em treinos de alto volume (cutting e bulking com drop-sets).
 
 
 def tab_evolucao(df_hist):
-    st.header("📈 Análise de Evolução")
+    st.header("📈 Evolução")
 
-    if df_hist.empty or len(df_hist) < 2:
-        st.info("📊 Registre pelo menos 2 dias de dados para visualizar os gráficos.")
+    # Carregar dados ricos de medidas_atleta
+    df_med = carregar_todos_registros()
+
+    def _plot_base(fig, title):
+        fig.update_layout(
+            title=title,
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            hovermode="x unified",
+            legend=dict(orientation="h", y=1.1, x=1, xanchor="right"),
+            margin=dict(l=20,r=20,t=50,b=20),
+        )
+        return fig
+
+    def _has_col(df, *cols):
+        return not df.empty and all(c in df.columns for c in cols) and \
+               any(pd.to_numeric(df[c], errors='coerce').dropna().gt(0).any() for c in cols)
+
+    if df_med.empty:
+        st.info("📊 Faça pelo menos 2 registros para visualizar os gráficos de evolução.")
         return
 
-    df_p = df_hist.sort_values("Data")
+    df_s = df_med.sort_values("data").copy()
+    for c in df_s.select_dtypes(include="object").columns:
+        try: df_s[c] = pd.to_numeric(df_s[c], errors="ignore")
+        except: pass
 
-    # VFC vs Carga
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_p["Data"], y=df_p["VFC_Atual"].astype(float),
-        mode="lines+markers", name="VFC (ms)", yaxis="y1",
-        line=dict(color="#00e676",width=2), marker=dict(size=6)))
-    fig.add_trace(go.Bar(x=df_p["Data"], y=df_p["Carga_Treino"].astype(float),
-        name="Volume Load", yaxis="y2", opacity=0.4, marker_color="#EF5350"))
-    fig.update_layout(
-        title="VFC vs Volume de Treino (Correlação SNC)",
-        yaxis=dict(title=dict(text="VFC (ms)",font=dict(color="#00e676")),tickfont=dict(color="#00e676")),
-        yaxis2=dict(title=dict(text="Volume Load",font=dict(color="#EF5350")),
-            tickfont=dict(color="#EF5350"),overlaying="y",side="right"),
-        plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",
-        hovermode="x unified",legend=dict(orientation="h",y=1.1,x=1,xanchor="right"),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Peso vs BF
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(x=df_p["Data"], y=df_p["Peso"].astype(float),
-        mode="lines+markers", name="Peso (kg)", yaxis="y1", line=dict(color="#42A5F5",width=2)))
-    fig2.add_trace(go.Scatter(x=df_p["Data"], y=df_p["BF_Atual"].astype(float),
-        mode="lines+markers", name="BF %", yaxis="y2", line=dict(color="#FFA726",width=2,dash="dash")))
-    fig2.update_layout(
-        title="Evolução de Peso e % BF",
-        yaxis=dict(title=dict(text="Peso (kg)",font=dict(color="#42A5F5")),tickfont=dict(color="#42A5F5")),
-        yaxis2=dict(title=dict(text="BF %",font=dict(color="#FFA726")),
-            tickfont=dict(color="#FFA726"),overlaying="y",side="right"),
-        plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",hovermode="x unified",
-    )
-    st.plotly_chart(fig2, use_container_width=True)
-
-    # Sleep vs Recovery
-    if "Sleep_Score" in df_p.columns and "Recovery_Time" in df_p.columns:
-        fig3 = go.Figure()
-        fig3.add_trace(go.Scatter(x=df_p["Data"], y=df_p["Sleep_Score"].astype(float),
-            mode="lines+markers", name="Sleep Score", yaxis="y1", line=dict(color="#CE93D8",width=2)))
-        fig3.add_trace(go.Scatter(x=df_p["Data"], y=df_p["Recovery_Time"].astype(float),
-            mode="lines+markers", name="Recovery Time (h)", yaxis="y2",
-            line=dict(color="#80DEEA",width=2,dash="dot")))
-        fig3.update_layout(
-            title="Sleep Score vs Recovery Time",
-            yaxis=dict(title=dict(text="Sleep Score",font=dict(color="#CE93D8")),tickfont=dict(color="#CE93D8")),
-            yaxis2=dict(title=dict(text="Recovery (h)",font=dict(color="#80DEEA")),
-                tickfont=dict(color="#80DEEA"),overlaying="y",side="right"),
-            plot_bgcolor="rgba(0,0,0,0)",paper_bgcolor="rgba(0,0,0,0)",hovermode="x unified",
+    # ── Gráfico 1: Composição Corporal ───────────────────────────────────────
+    st.subheader("⚖️ Composição Corporal")
+    if _has_col(df_s, "peso"):
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df_s["data"], y=pd.to_numeric(df_s["peso"],errors="coerce"),
+            mode="lines+markers", name="Peso (kg)", yaxis="y1",
+            line=dict(color="#42A5F5",width=2), marker=dict(size=6)))
+        for col, cor, label in [
+            ("bf_final","#FFA726","BF% Final"),
+            ("bf_bioimpedancia","#FF7043","BF% Bio"),
+            ("bf_calculado","#FFCA28","BF% Dobras"),
+        ]:
+            if col in df_s.columns and pd.to_numeric(df_s[col],errors="coerce").dropna().gt(0).any():
+                fig.add_trace(go.Scatter(x=df_s["data"], y=pd.to_numeric(df_s[col],errors="coerce"),
+                    mode="lines+markers", name=label, yaxis="y2",
+                    line=dict(color=cor,width=2,dash="dash"), marker=dict(size=5)))
+        for col, cor, label in [
+            ("massa_livre_gordura","#66BB6A","FFM (kg)"),
+            ("massa_gordura","#EF5350","FM (kg)"),
+        ]:
+            if col in df_s.columns and pd.to_numeric(df_s[col],errors="coerce").dropna().gt(0).any():
+                fig.add_trace(go.Scatter(x=df_s["data"], y=pd.to_numeric(df_s[col],errors="coerce"),
+                    mode="lines+markers", name=label, yaxis="y1",
+                    line=dict(color=cor,width=1.5,dash="dot"), marker=dict(size=5)))
+        fig.update_layout(
+            yaxis=dict(title="Peso / FM / FFM (kg)", tickfont=dict(color="#42A5F5")),
+            yaxis2=dict(title="BF (%)", tickfont=dict(color="#FFA726"), overlaying="y", side="right"),
         )
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(_plot_base(fig, "Peso, BF%, FM e FFM"), use_container_width=True)
 
+    # ── Gráfico 2: Água Corporal (BIA avançada) ───────────────────────────────
+    cols_agua = ["agua_total","agua_intracelular","agua_extracelular"]
+    if _has_col(df_s, *[c for c in cols_agua if c in df_s.columns]):
+        st.subheader("💧 Água Corporal")
+        st.caption("*ICW/ECW ratio crítico na Peak Week — alvo: ICW/ECW > 1.90 no dia do show. (Ribas et al., 2022 — PMC8880471)*")
+        fig_w = go.Figure()
+        cores_agua = {"agua_total":"#29B6F6","agua_intracelular":"#26A69A","agua_extracelular":"#EF5350"}
+        labels_agua = {"agua_total":"TBW (L)","agua_intracelular":"ICW (L)","agua_extracelular":"ECW (L)"}
+        for col in cols_agua:
+            if col in df_s.columns:
+                fig_w.add_trace(go.Scatter(x=df_s["data"], y=pd.to_numeric(df_s[col],errors="coerce"),
+                    mode="lines+markers", name=labels_agua[col],
+                    line=dict(color=cores_agua[col],width=2), marker=dict(size=6)))
+        if "agua_intracelular" in df_s.columns and "agua_extracelular" in df_s.columns:
+            icw = pd.to_numeric(df_s["agua_intracelular"],errors="coerce")
+            ecw = pd.to_numeric(df_s["agua_extracelular"],errors="coerce")
+            ratio = icw / ecw.replace(0, float("nan"))
+            fig_w.add_trace(go.Scatter(x=df_s["data"], y=ratio,
+                mode="lines+markers", name="ICW/ECW Ratio", yaxis="y2",
+                line=dict(color="#AB47BC",width=2,dash="dash"), marker=dict(size=5)))
+            fig_w.update_layout(
+                yaxis2=dict(title="ICW/ECW Ratio", tickfont=dict(color="#AB47BC"),
+                            overlaying="y", side="right"))
+        st.plotly_chart(_plot_base(fig_w, "Água Corporal Total, Intracelular e Extracelular"), use_container_width=True)
+
+    # ── Gráfico 3: Ângulo de Fase e Impedância ────────────────────────────────
+    if _has_col(df_s, "angulo_fase"):
+        st.subheader("⚡ Ângulo de Fase (BIA)")
+        st.caption("*PhA > 7° em atletas de resistência. Valores ≥ 9.6° observados em bodybuilders no dia do show. (Kyle et al., 2005; Ribas et al., 2022)*")
+        fig_pha = go.Figure()
+        fig_pha.add_trace(go.Scatter(x=df_s["data"], y=pd.to_numeric(df_s["angulo_fase"],errors="coerce"),
+            mode="lines+markers", name="Ângulo de Fase (°)",
+            line=dict(color="#FFCA28",width=2), marker=dict(size=8)))
+        for col, cor, label in [("resistencia","#78909C","R (Ω)"),("reactancia","#80DEEA","Xc (Ω)")]:
+            if col in df_s.columns and pd.to_numeric(df_s[col],errors="coerce").dropna().gt(0).any():
+                fig_pha.add_trace(go.Scatter(x=df_s["data"], y=pd.to_numeric(df_s[col],errors="coerce"),
+                    mode="lines", name=label, yaxis="y2",
+                    line=dict(color=cor,width=1.5,dash="dot")))
+        fig_pha.update_layout(
+            yaxis2=dict(title="R / Xc (Ω)", overlaying="y", side="right"))
+        fig_pha.add_hrect(y0=7, y1=12, fillcolor="rgba(102,187,106,0.15)",
+                          line_width=0, annotation_text="Referência atletas ≥7°", annotation_position="top left")
+        st.plotly_chart(_plot_base(fig_pha, "Ângulo de Fase, Resistência e Reactância"), use_container_width=True)
+
+    # ── Gráfico 4: Dobras Cutâneas ────────────────────────────────────────────
+    dobras_cols = ["dobra_peitoral","dobra_axilar","dobra_tricipital","dobra_subescapular",
+                   "dobra_abdominal","dobra_suprailiaca","dobra_coxa","dobra_bicipital"]
+    dobras_disp = [c for c in dobras_cols if c in df_s.columns and
+                   pd.to_numeric(df_s[c],errors="coerce").dropna().gt(0).any()]
+    if dobras_disp:
+        st.subheader("🔬 Dobras Cutâneas (mm)")
+        cores_d = ["#EF5350","#FF7043","#FFA726","#FFCA28","#66BB6A","#29B6F6","#5C6BC0","#AB47BC"]
+        fig_d = go.Figure()
+        for i, col in enumerate(dobras_disp):
+            lbl = col.replace("dobra_","").capitalize()
+            fig_d.add_trace(go.Scatter(x=df_s["data"], y=pd.to_numeric(df_s[col],errors="coerce"),
+                mode="lines+markers", name=lbl,
+                line=dict(color=cores_d[i % len(cores_d)],width=2), marker=dict(size=5)))
+        # Soma total das dobras disponíveis
+        df_soma = sum(pd.to_numeric(df_s[c],errors="coerce").fillna(0) for c in dobras_disp)
+        fig_d.add_trace(go.Scatter(x=df_s["data"], y=df_soma,
+            mode="lines", name="Soma total (mm)", yaxis="y2",
+            line=dict(color="white",width=2,dash="dash")))
+        fig_d.update_layout(
+            yaxis2=dict(title="Soma (mm)", overlaying="y", side="right"))
+        st.plotly_chart(_plot_base(fig_d, "Evolução das Dobras Cutâneas (mm)"), use_container_width=True)
+
+    # ── Gráfico 5: Circunferências ────────────────────────────────────────────
+    circ_cols = ["cintura","ombros","peito","quadril","biceps_d","coxa_d","panturrilha_d"]
+    circ_disp = [c for c in circ_cols if c in df_s.columns and
+                 pd.to_numeric(df_s[c],errors="coerce").dropna().gt(0).any()]
+    if circ_disp:
+        st.subheader("📐 Circunferências (cm)")
+        cores_c = ["#EF5350","#42A5F5","#66BB6A","#FFA726","#AB47BC","#29B6F6","#FFCA28"]
+        fig_c = go.Figure()
+        for i, col in enumerate(circ_disp):
+            fig_c.add_trace(go.Scatter(x=df_s["data"], y=pd.to_numeric(df_s[col],errors="coerce"),
+                mode="lines+markers", name=col.replace("_d","").capitalize(),
+                line=dict(color=cores_c[i % len(cores_c)],width=2), marker=dict(size=6)))
+        st.plotly_chart(_plot_base(fig_c, "Evolução das Circunferências (cm)"), use_container_width=True)
+
+    # ── Gráfico 6: Proporções Estéticas ──────────────────────────────────────
+    if _has_col(df_s, "cintura","ombros"):
+        st.subheader("🌀 Razão Áurea — Proporções")
+        ratio_oc = pd.to_numeric(df_s["ombros"],errors="coerce") / \
+                   pd.to_numeric(df_s["cintura"],errors="coerce").replace(0, float("nan"))
+        fig_ra = go.Figure()
+        fig_ra.add_trace(go.Scatter(x=df_s["data"], y=ratio_oc,
+            mode="lines+markers", name="Ombro/Cintura",
+            line=dict(color="#FFCA28",width=2), marker=dict(size=7)))
+        if _has_col(df_s, "quadril","cintura"):
+            ratio_qc = pd.to_numeric(df_s["quadril"],errors="coerce") / \
+                       pd.to_numeric(df_s["cintura"],errors="coerce").replace(0, float("nan"))
+            fig_ra.add_trace(go.Scatter(x=df_s["data"], y=ratio_qc,
+                mode="lines+markers", name="Quadril/Cintura",
+                line=dict(color="#AB47BC",width=2), marker=dict(size=7)))
+        fig_ra.add_hline(y=PHI, line_dash="dash", line_color="#29B6F6",
+                         annotation_text=f"φ = {PHI} (Razão Áurea)", annotation_position="right")
+        st.plotly_chart(_plot_base(fig_ra, "Evolução das Proporções Estéticas vs. Razão Áurea"), use_container_width=True)
+
+    # ── Gráfico 7: Recuperação (VFC, Sleep, Recovery) ─────────────────────────
+    rec_cols = [c for c in ["vfc_noturna","sleep_score","recovery_time","fc_repouso"]
+                if c in df_s.columns and pd.to_numeric(df_s[c],errors="coerce").dropna().gt(0).any()]
+    if rec_cols:
+        st.subheader("🎯 Dados de Recuperação")
+        fig_r = go.Figure()
+        cfg_rec = {
+            "vfc_noturna":   ("#00e676","VFC Noturna (ms)","y1"),
+            "sleep_score":   ("#CE93D8","Sleep Score","y1"),
+            "recovery_time": ("#80DEEA","Recovery Time (h)","y2"),
+            "fc_repouso":    ("#FF7043","FC Repouso (bpm)","y2"),
+            "carga_treino":  ("#EF5350","Volume Load","y2"),
+        }
+        for col in rec_cols:
+            cfg = cfg_rec.get(col, ("#FFFFFF",col,"y1"))
+            fig_r.add_trace(go.Scatter(x=df_s["data"], y=pd.to_numeric(df_s[col],errors="coerce"),
+                mode="lines+markers", name=cfg[1], yaxis=cfg[2],
+                line=dict(color=cfg[0],width=2), marker=dict(size=5)))
+        if "carga_treino" in df_s.columns and pd.to_numeric(df_s["carga_treino"],errors="coerce").dropna().gt(0).any():
+            fig_r.add_trace(go.Bar(x=df_s["data"], y=pd.to_numeric(df_s["carga_treino"],errors="coerce"),
+                name="Volume Load", yaxis="y2", opacity=0.3, marker_color="#EF5350"))
+        fig_r.update_layout(
+            yaxis=dict(title="VFC / Sleep", tickfont=dict(color="#00e676")),
+            yaxis2=dict(title="Recovery / FC / Volume", overlaying="y", side="right"))
+        st.plotly_chart(_plot_base(fig_r, "Dados de Recuperação"), use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ABA — MEDIDAS & PROPORÇÕES
+# ABA — REGISTROS UNIFICADOS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def tab_registros(p: dict, atleta, perfil: dict, df_historico: pd.DataFrame):
+
+def tab_registros(p: dict, atleta, perfil: dict):
     """
-    Aba unificada de todos os registros de dados coletados:
-    - Seção A: Peso e BF% semanal (bioimpedância + dobras com seleção inteligente de fórmula)
-    - Seção B: Circunferências e dobras cutâneas semanais
-    - Seção C: Histórico de registros diários (CRUD)
-    - Seção D: Análise de proporções estéticas
-    - Seção E: Zonas de FC (manual ergoespirometria ou Karvonen)
+    Aba unificada de todos os registros. Um registro = uma linha com data/hora + quaisquer campos.
+    Campos vazios gravam NULL. Sem auto-preenchimento de valores — só auto-preencher
+    do último registro via botão por grupo.
     """
     st.header("📁 Registros")
-    st.caption("Peso, BF% e medidas são semanais — registre uma vez por semana na mesma condição (manhã, em jejum).")
 
-    categoria = p["categoria"]
-    altura_cm = p.get("altura", 178.0)
-    sexo      = p.get("sexo", "Masculino")
-    idade     = p.get("idade", 30)
+    # ── Estado da sessão ──────────────────────────────────────────────────────
+    # reg_editando: dict com o registro selecionado para edição (None = novo)
+    if "reg_editando" not in st.session_state:
+        st.session_state["reg_editando"] = None
 
-    # Carregar última medida
-    ultima = carregar_ultima_medida_semanal()
+    # ── Histórico (sempre visível no topo) ────────────────────────────────────
+    st.subheader("📋 Histórico de Registros")
+    df_all = carregar_todos_registros()
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SEÇÃO A — PESO E BF%
-    # ═══════════════════════════════════════════════════════════════════════════
-    st.subheader("⚖️ A — Peso e Composição Corporal")
-    st.caption("Preencha semanalmente. O sistema usa esses valores em todos os cálculos.")
+    sel_id = None  # ID do registro selecionado
 
-    col_peso, col_bf = st.columns(2)
+    if df_all.empty:
+        st.info("Nenhum registro encontrado. Crie o primeiro abaixo.")
+    else:
+        # Colunas resumidas para a tabela
+        cols_resumo = ["data","hora_registro","peso","bf_final","vfc_noturna",
+                       "sleep_score","recovery_time","carga_treino","angulo_fase","notas"]
+        cols_ok = [c for c in cols_resumo if c in df_all.columns]
+        df_disp = df_all[["id"] + cols_ok].copy() if "id" in df_all.columns else df_all[cols_ok].copy()
 
-    with col_peso:
-        data_med = st.date_input("Data da medição", value=date.today(), key="reg_data")
-        peso_sem = st.number_input("Peso (kg)",
-            value=float(ultima.get("peso") or 85.0), step=0.1, key="reg_peso")
-        st.caption("💡 Pese-se sempre na mesma condição: manhã, após urinar, antes de comer.")
-
-    with col_bf:
-        bf_bio = st.number_input(
-            "BF% via Bioimpedância",
-            value=float(ultima.get("bf_bioimpedancia") or 0.0),
-            min_value=0.0, max_value=60.0, step=0.1, key="reg_bf_bio",
-            help="Digite o resultado direto do aparelho. 0 = não disponível."
+        ev = st.dataframe(
+            df_disp.drop(columns=["id"], errors="ignore"),
+            on_select="rerun", selection_mode="single-row",
+            use_container_width=True, hide_index=True,
         )
-        st.caption("💡 Bioimpedância tem erro de ±3–8%. Use como referência de tendência.")
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SEÇÃO B — DOBRAS CUTÂNEAS COM SELEÇÃO DE FÓRMULA
-    # ═══════════════════════════════════════════════════════════════════════════
-    st.divider()
-    st.subheader("🔬 B — Dobras Cutâneas (mm)")
-
-    with st.expander("Expandir para inserir dobras cutâneas", expanded=False):
-        st.caption("Meça com plicômetro. Todas as medidas no lado direito do corpo. Pellizcar bem antes de medir.")
-
-        col_d1, col_d2 = st.columns(2)
-        with col_d1:
-            d_peit = st.number_input("Peitoral", min_value=0.0, step=0.5,
-                value=float(ultima.get("dobra_peitoral") or 0.0), key="dob_peit")
-            d_axil = st.number_input("Axilar Média", min_value=0.0, step=0.5,
-                value=float(ultima.get("dobra_axilar") or 0.0), key="dob_axil")
-            d_tric = st.number_input("Tricipital", min_value=0.0, step=0.5,
-                value=float(ultima.get("dobra_tricipital") or 0.0), key="dob_tric")
-            d_supr = st.number_input("Suprailíaca", min_value=0.0, step=0.5,
-                value=float(ultima.get("dobra_suprailiaca") or 0.0), key="dob_supr")
-        with col_d2:
-            d_sube = st.number_input("Subescapular", min_value=0.0, step=0.5,
-                value=float(ultima.get("dobra_subescapular") or 0.0), key="dob_sube")
-            d_abdo = st.number_input("Abdominal", min_value=0.0, step=0.5,
-                value=float(ultima.get("dobra_abdominal") or 0.0), key="dob_abdo")
-            d_coxa = st.number_input("Coxa", min_value=0.0, step=0.5,
-                value=float(ultima.get("dobra_coxa") or 0.0), key="dob_coxa")
-            d_bici = st.number_input("Bíceps (para Durnin)", min_value=0.0, step=0.5,
-                value=float(ultima.get("dobra_bicipital") or 0.0), key="dob_bici")
-
-        dobras_dict = {
-            "dobra_peitoral":d_peit,"dobra_axilar":d_axil,"dobra_tricipital":d_tric,
-            "dobra_suprailiaca":d_supr,"dobra_subescapular":d_sube,"dobra_abdominal":d_abdo,
-            "dobra_coxa":d_coxa,"dobra_bicipital":d_bici,
-        }
-
-        # Sugestão inteligente de fórmula
-        sugerida_id, sugerida_just = sugerir_formula_dobras(dobras_dict, sexo, bf_bio or 15.0)
-        st.info(f"💡 **Fórmula sugerida:** {FORMULAS_DOBRAS.get(sugerida_id,{}).get('nome',sugerida_id)} — {sugerida_just}")
-
-        # Listar só fórmulas compatíveis com o sexo
-        opcoes_formulas = []
-        for fid, finfo in FORMULAS_DOBRAS.items():
-            campos = finfo["campos_masc"] if sexo == "Masculino" else finfo["campos_fem"]
-            if campos:  # fórmula tem campos para este sexo
-                opcoes_formulas.append((fid, finfo["nome"]))
-
-        formula_label_to_id = {v: k for k, v in opcoes_formulas}
-        labels = [v for _, v in opcoes_formulas]
-        default_label = FORMULAS_DOBRAS.get(sugerida_id, {}).get("nome", labels[0])
-        if default_label not in labels:
-            default_label = labels[0]
-
-        formula_escolhida_label = st.selectbox(
-            "Fórmula de cálculo",
-            options=labels,
-            index=labels.index(default_label),
-            key="reg_formula",
-            help="O app sugere automaticamente a melhor, mas você pode escolher outra."
-        )
-        formula_id = formula_label_to_id.get(formula_escolhida_label, "jp7")
-
-        # Calcular BF% pela fórmula escolhida
-        bf_calc = calcular_bf_por_formula(formula_id, dobras_dict, idade, sexo)
-
-        if bf_calc is not None:
-            lbm_c = round(peso_sem * (1 - bf_calc/100), 1)
-            fm_c  = round(peso_sem * (bf_calc/100), 1)
-            c1,c2,c3 = st.columns(3)
-            c1.metric(f"BF% ({formula_escolhida_label.split('(')[0].strip()})", f"{bf_calc}%")
-            c2.metric("LBM", f"{lbm_c}kg")
-            c3.metric("FM", f"{fm_c}kg")
-            ref = FORMULAS_DOBRAS.get(formula_id,{}).get("referencia","")
-            st.caption(f"*{FORMULAS_DOBRAS.get(formula_id,{}).get('descricao','')} — {ref}*")
+        if ev.selection.rows:
+            row_idx = ev.selection.rows[0]
+            row = df_all.iloc[row_idx].to_dict()
+            sel_id = str(row.get("id",""))
+            st.session_state["reg_editando"] = row
+            st.caption(f"✏️ Registro **{row.get('data','')} {row.get('hora_registro','')}** selecionado — edite abaixo e salve, ou delete.")
         else:
-            st.warning("Preencha as dobras acima para calcular o BF%.")
-            bf_calc = None
+            # Se nenhuma linha selecionada, limpar edição anterior
+            if st.session_state.get("_last_sel_id") and st.session_state["reg_editando"]:
+                st.session_state["reg_editando"] = None
+            st.session_state["_last_sel_id"] = sel_id
 
-    # BF% final: bioimpedância se disponível, dobras como secundário
-    bf_final = None
-    bf_fonte = "—"
-    if bf_calc is not None and bf_bio > 0:
-        media = round((bf_calc + bf_bio) / 2, 1)
-        bf_final = media
-        bf_fonte = f"Média bioimpedância ({bf_bio}%) + dobras ({bf_calc}%) = {media}%"
-    elif bf_calc is not None:
-        bf_final = bf_calc
-        bf_fonte = f"Dobras ({formula_escolhida_label.split('(')[0].strip()}): {bf_calc}%"
-    elif bf_bio > 0:
-        bf_final = bf_bio
-        bf_fonte = f"Bioimpedância: {bf_bio}%"
-
-    if bf_final:
-        st.success(f"✅ **BF% usado no sistema: {bf_final}%** — *{bf_fonte}*")
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SEÇÃO C — CIRCUNFERÊNCIAS
-    # ═══════════════════════════════════════════════════════════════════════════
     st.divider()
-    st.subheader("📐 C — Circunferências (cm)")
 
-    with st.expander("Expandir para inserir circunferências", expanded=False):
-        cc1, cc2 = st.columns(2)
-        with cc1:
-            cintura  = st.number_input("Cintura (nível umbigo)",   min_value=0.0, step=0.5,
-                value=float(ultima.get("cintura") or 80.0), key="med_cin")
-            ombros   = st.number_input("Ombros (maior circ.)",     min_value=0.0, step=0.5,
-                value=float(ultima.get("ombros") or 110.0), key="med_omb")
-            peito    = st.number_input("Peito",                    min_value=0.0, step=0.5,
-                value=float(ultima.get("peito") or 100.0),  key="med_pei")
-            quadril  = st.number_input("Quadril",                  min_value=0.0, step=0.5,
-                value=float(ultima.get("quadril") or 95.0), key="med_qua")
-        with cc2:
-            biceps_d = st.number_input("Bíceps D (contraído)",     min_value=0.0, step=0.5,
-                value=float(ultima.get("biceps_d") or 38.0), key="med_bic")
-            coxa_d   = st.number_input("Coxa D",                   min_value=0.0, step=0.5,
-                value=float(ultima.get("coxa_d") or 56.0),  key="med_cox")
-            pant_d   = st.number_input("Panturrilha D",            min_value=0.0, step=0.5,
-                value=float(ultima.get("panturrilha_d") or 38.0), key="med_pan")
-            pescoco  = st.number_input("Pescoço",                  min_value=0.0, step=0.5,
-                value=float(ultima.get("pescoco") or 38.0), key="med_pes")
+    # ── Modo: novo ou edição ──────────────────────────────────────────────────
+    editando = st.session_state["reg_editando"]
+    is_edicao = editando is not None
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SEÇÃO D — ZONAS DE FC (manual ou Karvonen)
-    # ═══════════════════════════════════════════════════════════════════════════
-    st.divider()
-    st.subheader("🫀 D — Zonas de Frequência Cardíaca")
-
-    usar_manual = st.checkbox(
-        "Tenho laudo de ergoespirometria com zonas de FC personalizadas",
-        value=bool(ultima.get("zona1_min")), key="fc_manual"
-    )
-    zonas_input = {}
-    if usar_manual:
-        st.caption("Preencha as zonas do seu laudo. Estas substituem o cálculo de Karvonen em todo o app.")
-        nomes_z = ["Z1 Recuperação","Z2 LISS","Z3 Aeróbio","Z4 Limiar","Z5 Máximo"]
-        for i in range(1, 6):
-            cz1, cz2, cz3 = st.columns([2,1,1])
-            cz1.markdown(f"**{nomes_z[i-1]}**")
-            zonas_input[f"zona{i}_min"] = cz2.number_input(
-                "Min", min_value=0.0, step=1.0,
-                value=float(ultima.get(f"zona{i}_min") or 0.0), key=f"z{i}min")
-            zonas_input[f"zona{i}_max"] = cz3.number_input(
-                "Máx", min_value=0.0, step=1.0,
-                value=float(ultima.get(f"zona{i}_max") or 0.0), key=f"z{i}max")
-        zonas_man = zonas_fc_manuais(zonas_input)
-        if zonas_man:
-            st.success("✅ Zonas de ergoespirometria configuradas — usadas em todo o app.")
+    if is_edicao:
+        st.subheader("✏️ Editando Registro")
+        col_info, col_del = st.columns([4, 1])
+        with col_info:
+            st.info(f"Editando: **{editando.get('data','')} {editando.get('hora_registro','')}**")
+        with col_del:
+            if st.button("🗑️ Deletar este registro", type="secondary", use_container_width=True, key="btn_del"):
+                deletar_registro_unificado(str(editando["id"]))
+                st.session_state["reg_editando"] = None
+                st.rerun()
     else:
-        zonas_man = {}
-        zonas_kv  = calcular_zonas_karvonen(idade, p.get("fc_rep", 60))
-        st.caption("Usando fórmula de Karvonen. Configure ergoespirometria acima para maior precisão.")
-        emj = {"Zona 1 (Recuperação Ativa)":"🔵","Zona 2 (LISS / Fat-Burning)":"🟢",
-               "Zona 3 (Aeróbio Moderado)":"🟡","Zona 4 (Limiar Anaeróbio)":"🟠","Zona 5 (HIIT / Máximo)":"🔴"}
-        for z,(mn,mx) in zonas_kv.items():
-            st.write(f"{emj.get(z,'')} **{z}:** {mn}–{mx} bpm")
+        st.subheader("➕ Novo Registro")
 
-    notas = st.text_area("Notas desta medição", value="", key="reg_notas", height=60)
+    # Último registro para botão auto-preencher
+    ultimo = carregar_ultimo_registro()
 
-    # ── Botão salvar tudo ─────────────────────────────────────────────────────
-    st.divider()
-    if st.button("💾 Salvar Registro Semanal", type="primary", use_container_width=True, key="btn_salvar_sem"):
+    def _v(campo: str, default=None):
+        """Retorna valor do registro em edição, ou None para novo."""
+        if is_edicao:
+            v = editando.get(campo)
+            return v if v is not None else default
+        return default
+
+    def _f(v, t=float):
+        """Converte para tipo seguro; None se vazio."""
         try:
-            dobras_save = {
-                "dobra_peitoral":d_peit,"dobra_axilar":d_axil,"dobra_tricipital":d_tric,
-                "dobra_suprailiaca":d_supr,"dobra_subescapular":d_sube,"dobra_abdominal":d_abdo,
-                "dobra_coxa":d_coxa,"dobra_bicipital":d_bici,
-            } if 'd_peit' in dir() else {}
+            r = t(v)
+            return r if r != 0 else None
         except:
-            dobras_save = {}
-        try:
-            circ_save = {
-                "cintura":cintura,"ombros":ombros,"peito":peito,"quadril":quadril,
-                "biceps_d":biceps_d,"coxa_d":coxa_d,"panturrilha_d":pant_d,"pescoco":pescoco,
-            }
-        except:
-            circ_save = {}
-        payload = {
-            "data": str(data_med),
-            "peso": float(peso_sem),
-            "bf_bioimpedancia": float(bf_bio) if bf_bio > 0 else None,
-            "bf_formula": formula_id if bf_calc is not None else None,
-            "bf_calculado": float(bf_calc) if bf_calc is not None else None,
-            "bf_final": float(bf_final) if bf_final else None,
-            "notas": notas,
-            **dobras_save,
-            **circ_save,
-            **zonas_input,
-        }
-        salvar_medida_semanal(payload)
-        st.rerun()
+            return None
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SEÇÃO E — ANÁLISE DE PROPORÇÕES
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ── DATA E HORA (auto no novo, editável) ─────────────────────────────────
+    st.markdown("#### 📅 Data e Hora")
+    now = datetime.now()
+    col_d, col_h = st.columns(2)
+    with col_d:
+        data_reg = st.date_input("Data",
+            value=datetime.strptime(str(_v("data", now.strftime("%Y-%m-%d"))), "%Y-%m-%d").date(),
+            key="reg_data")
+    with col_h:
+        hora_default = _v("hora_registro", now.strftime("%H:%M"))
+        hora_reg = st.text_input("Hora (HH:MM)", value=str(hora_default) if hora_default else now.strftime("%H:%M"), key="reg_hora")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # GRUPO 1 — COMPOSIÇÃO CORPORAL
+    # ════════════════════════════════════════════════════════════════════════
     st.divider()
-    st.subheader("📊 E — Proporções Estéticas")
-    prop_info = PROPORCOES_CATEGORIA.get(categoria, {})
-    st.info(f"**{categoria}:** {prop_info.get('descricao','')}")
 
-    try:
-        medidas_dict = {
-            "cintura":cintura,"ombros":ombros,"peito":peito,
-            "quadril":quadril,"biceps_d":biceps_d,"coxa_d":coxa_d,
-        }
-        proporcoes = avaliar_proporcoes(categoria, medidas_dict, altura_cm)
-    except:
-        medidas_dict = {}
-        proporcoes   = {}
+    col_g1_hdr, col_g1_btn = st.columns([4, 1])
+    with col_g1_hdr:
+        st.markdown("#### ⚖️ Composição Corporal")
+        st.caption("Dados diretos da balança de bioimpedância ou calculados.")
+    with col_g1_btn:
+        if st.button("📋 Preencher do último registro", key="fill_comp", use_container_width=True):
+            for k in ["peso","bf_bioimpedancia","bf_formula","bf_calculado","bf_final",
+                      "massa_gordura","massa_livre_gordura",
+                      "agua_total","agua_intracelular","agua_extracelular",
+                      "angulo_fase","resistencia","reactancia"]:
+                st.session_state[f"reg_{k}"] = ultimo.get(k) or ""
 
-    if proporcoes:
-        if "ombro_cintura" in proporcoes:
-            r = proporcoes["ombro_cintura"]
-            st.markdown("### 🌀 Razão Áurea (φ = 1.618)")
-            prog = min(r["atual"] / r["alvo"], 1.0) if r["alvo"] > 0 else 0
-            st.progress(prog, text=f"{r['atual']:.3f} / {r['alvo']} — {r['status']}")
-            st.caption(r["rec"])
+    cc1, cc2, cc3 = st.columns(3)
+    with cc1:
+        peso = st.number_input("Peso (kg)", min_value=0.0, max_value=300.0, step=0.05,
+            value=_f(_v("peso")) or 0.0, format="%.2f", key="reg_peso")
+        massa_gordura = st.number_input("Massa de Gordura FM (kg)", min_value=0.0, step=0.1,
+            value=_f(_v("massa_gordura")) or 0.0, key="reg_massa_gordura")
+        massa_livre_gordura = st.number_input("Massa Livre de Gordura FFM (kg)", min_value=0.0, step=0.1,
+            value=_f(_v("massa_livre_gordura")) or 0.0, key="reg_massa_livre_gordura")
+    with cc2:
+        bf_bio = st.number_input("BF% Bioimpedância", min_value=0.0, max_value=60.0, step=0.1,
+            value=_f(_v("bf_bioimpedancia")) or 0.0, key="reg_bf_bioimpedancia",
+            help="Valor direto do aparelho de bioimpedância.")
 
-        st.markdown("### Todas as Proporções")
-        labels_prop = {
-            "cintura":"Cintura","ombro_cintura":"Ombro / Cintura",
-            "quadril_cintura":"Quadril / Cintura","peito_cintura":"Peito / Cintura",
-            "braco_cintura":"Braço / Cintura",
-        }
-        for key, dados in proporcoes.items():
-            label = labels_prop.get(key, key)
-            alvo  = dados.get("alvo") or dados.get("alvo_max", "—")
-            st.markdown(
-                f"{dados['status']} **{label}** — "
-                f"Atual: `{dados.get('atual', '—')}` | "
-                f"Alvo: `{alvo}` — *{dados['rec']}*"
-            )
-    else:
-        st.info("Expanda a seção de circunferências e preencha os dados para ver a análise.")
+        # Selecionar fórmula de dobras
+        sexo  = p.get("sexo","Masculino")
+        idade = p.get("idade", 30)
+        opcoes_f = [(fid, fi["nome"]) for fid, fi in __import__("calculos_fisio").FORMULAS_DOBRAS.items()
+                    if (fi["campos_masc"] if sexo=="Masculino" else fi["campos_fem"])]
+        labels_f = [v for _,v in opcoes_f]; ids_f = [k for k,_ in opcoes_f]
+        cur_formula = _v("bf_formula", "jp7")
+        idx_f = ids_f.index(cur_formula) if cur_formula in ids_f else 0
+        formula_lbl = st.selectbox("Fórmula das dobras", labels_f, index=idx_f, key="reg_bf_formula_sel")
+        formula_id  = ids_f[labels_f.index(formula_lbl)]
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SEÇÃO F — HISTÓRICO DE REGISTROS DIÁRIOS
-    # ═══════════════════════════════════════════════════════════════════════════
+        bf_calc_input = st.number_input("BF% por Dobras (calculado)", min_value=0.0, max_value=60.0, step=0.1,
+            value=_f(_v("bf_calculado")) or 0.0, key="reg_bf_calculado",
+            help="Calculado automaticamente ao salvar se dobras estiverem preenchidas.")
+    with cc3:
+        bf_final_input = st.number_input("BF% Final (usado nos cálculos)", min_value=0.0, max_value=60.0, step=0.1,
+            value=_f(_v("bf_final")) or 0.0, key="reg_bf_final",
+            help="Deixe 0 para calcular automaticamente como média Bio + Dobras.")
+
+        st.markdown("**BIA Avançada**")
+        st.caption("Resistência (R), Reactância (Xc) e Ângulo de Fase — exportados por aparelhos avançados de BIA (InBody, Tanita série profissional).")
+        resistencia = st.number_input("Resistência R (Ω)", min_value=0.0, step=1.0,
+            value=_f(_v("resistencia")) or 0.0, key="reg_resistencia")
+        reactancia  = st.number_input("Reactância Xc (Ω)", min_value=0.0, step=0.5,
+            value=_f(_v("reactancia")) or 0.0, key="reg_reactancia")
+        angulo_fase = st.number_input("Ângulo de Fase (°)", min_value=0.0, max_value=20.0, step=0.1,
+            value=_f(_v("angulo_fase")) or 0.0, key="reg_angulo_fase",
+            help="PhA = arctan(Xc/R) × 180°/π. Atletas de elite: 7–12°. Bodybuilders show-day: 9.6–11.2°. *(Kyle et al., 2005; Ribas et al., 2022)*")
+
+    # Água corporal
+    st.markdown("**Água Corporal**")
+    st.caption("TBW = ICW + ECW. Na Peak Week o objetivo é aumentar ICW e reduzir ECW → ICW/ECW ≥ 1.90. *(Ribas et al., 2022 — PMC8880471)*")
+    cw1, cw2, cw3 = st.columns(3)
+    agua_total = cw1.number_input("Água Total TBW (L)", min_value=0.0, step=0.1,
+        value=_f(_v("agua_total")) or 0.0, key="reg_agua_total")
+    agua_intra = cw2.number_input("Água Intracelular ICW (L)", min_value=0.0, step=0.1,
+        value=_f(_v("agua_intracelular")) or 0.0, key="reg_agua_intracelular")
+    agua_extra = cw3.number_input("Água Extracelular ECW (L)", min_value=0.0, step=0.1,
+        value=_f(_v("agua_extracelular")) or 0.0, key="reg_agua_extracelular")
+    if agua_intra > 0 and agua_extra > 0:
+        ratio_icw = round(agua_intra / agua_extra, 3)
+        cor_r = "🟢" if ratio_icw >= 1.90 else ("🟡" if ratio_icw >= 1.60 else "🔴")
+        st.caption(f"{cor_r} ICW/ECW ratio: **{ratio_icw}** (alvo show-day: ≥ 1.90)")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # GRUPO 2 — DADOS DE RECUPERAÇÃO
+    # ════════════════════════════════════════════════════════════════════════
     st.divider()
-    st.subheader("📅 F — Histórico de Registros Diários")
-    st.caption("Selecione uma linha para editar ou deletar via sidebar. "
-               "Dados diários: VFC, Sleep, Recovery, FC, Volume de Treino.")
+    col_g2_hdr, col_g2_btn = st.columns([4, 1])
+    with col_g2_hdr:
+        st.markdown("#### 🎯 Dados de Recuperação (Garmin / Wearable)")
+    with col_g2_btn:
+        if st.button("📋 Preencher do último", key="fill_rec", use_container_width=True):
+            for k in ["carga_treino","vfc_noturna","sleep_score","recovery_time","fc_repouso"]:
+                st.session_state[f"reg_{k}"] = ultimo.get(k) or ""
 
-    df_disp = df_historico.sort_values("Data", ascending=False) if not df_historico.empty else df_historico
-    # Mostrar apenas colunas relevantes para registros diários
-    cols_disp = ["Data","Carga_Treino","VFC_Atual","Sleep_Score","Recovery_Time","FC_Repouso","Fase_Historica"]
-    cols_ok   = [c for c in cols_disp if c in df_disp.columns]
-    ev = st.dataframe(
-        df_disp[cols_ok] if cols_ok else df_disp,
-        on_select="rerun", selection_mode="single-row", use_container_width=True
-    )
-    if not df_historico.empty and len(ev.selection.rows) > 0:
-        row_sel = df_disp.iloc[ev.selection.rows[0]]
-        # Preservar row completo (incluindo Peso/BF_Atual para o payload de update)
-        full_row = df_disp.iloc[ev.selection.rows[0]].to_dict()
-        st.session_state["linha_selecionada"] = full_row
-        st.caption(f"✏️ Linha selecionada: **{full_row.get('Data','')}** — use sidebar para Atualizar ou Deletar.")
-    else:
-        st.session_state["linha_selecionada"] = None
+    rc1, rc2, rc3 = st.columns(3)
+    with rc1:
+        carga_treino  = st.number_input("Volume Load (kg×reps)", min_value=0.0, step=10.0,
+            value=_f(_v("carga_treino")) or 0.0, key="reg_carga_treino")
+        vfc_noturna   = st.number_input("VFC Noturna (ms)", min_value=0.0, step=1.0,
+            value=_f(_v("vfc_noturna")) or 0.0, key="reg_vfc_noturna")
+    with rc2:
+        sleep_score   = st.number_input("Sleep Score (0–100)", min_value=0, max_value=100, step=1,
+            value=int(_v("sleep_score") or 0), key="reg_sleep_score")
+        recovery_time = st.number_input("Recovery Time (h)", min_value=0, step=1,
+            value=int(_v("recovery_time") or 0), key="reg_recovery_time")
+    with rc3:
+        fc_repouso = st.number_input("FC Repouso (bpm)", min_value=0, step=1,
+            value=int(_v("fc_repouso") or 0), key="reg_fc_repouso")
 
-    # ── Histórico de medidas semanais ─────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    # GRUPO 3 — DOBRAS CUTÂNEAS
+    # ════════════════════════════════════════════════════════════════════════
     st.divider()
-    st.subheader("📈 Histórico de Medidas Semanais")
-    try:
-        res_h = _client().table("medidas_atleta").select(
-            "id,data,peso,bf_final,bf_bioimpedancia,bf_calculado,bf_formula,cintura,ombros,biceps_d"
-        ).eq("user_id", get_uid()).order("data", desc=True).execute()
-        if res_h.data:
-            df_med = pd.DataFrame(res_h.data)
-            st.dataframe(df_med, use_container_width=True, hide_index=True)
-            # Delete de medida semanal
-            if len(df_med) > 0:
-                del_id = st.selectbox(
-                    "Deletar medida semanal por data:",
-                    options=["—"] + list(df_med["data"].astype(str)),
-                    key="del_med_sel"
-                )
-                if del_id != "—":
-                    row_d = df_med[df_med["data"].astype(str) == del_id].iloc[0]
-                    if st.button(f"🗑️ Deletar medida de {del_id}", key="btn_del_med"):
-                        deletar_medida_semanal(str(row_d["id"]))
-                        st.rerun()
-        else:
-            st.info("Nenhuma medida semanal registrada ainda.")
-    except Exception as e:
-        st.warning(f"Erro ao carregar histórico de medidas: {e}")
+    col_g3_hdr, col_g3_btn = st.columns([4, 1])
+    with col_g3_hdr:
+        st.markdown("#### 🔬 Dobras Cutâneas (mm)")
+        st.caption("Plicômetro, lado direito do corpo. Todos os campos opcionais.")
+    with col_g3_btn:
+        if st.button("📋 Preencher do último", key="fill_dob", use_container_width=True):
+            for k in ["dobra_peitoral","dobra_axilar","dobra_tricipital","dobra_subescapular",
+                      "dobra_abdominal","dobra_suprailiaca","dobra_coxa","dobra_bicipital"]:
+                st.session_state[f"reg_{k}"] = ultimo.get(k) or ""
+
+    db1, db2, db3, db4 = st.columns(4)
+    dobras_vals = {}
+    campos_dobras = [
+        ("dobra_peitoral","Peitoral",db1), ("dobra_axilar","Axilar",db2),
+        ("dobra_tricipital","Tricipital",db3), ("dobra_subescapular","Subescapular",db4),
+        ("dobra_abdominal","Abdominal",db1), ("dobra_suprailiaca","Suprailiaca",db2),
+        ("dobra_coxa","Coxa",db3), ("dobra_bicipital","Bíceps (Durnin)",db4),
+    ]
+    for campo, label, col in campos_dobras:
+        with col:
+            v = dobras_vals[campo] = st.number_input(label, min_value=0.0, step=0.5,
+                value=_f(_v(campo)) or 0.0, key=f"reg_{campo}")
+
+    # Calcular BF% pelas dobras automaticamente
+    bf_calculado = None
+    if any(v > 0 for v in dobras_vals.values()):
+        from calculos_fisio import calcular_bf_por_formula, sugerir_formula_dobras, FORMULAS_DOBRAS
+        sugerida_id, sugerida_just = sugerir_formula_dobras(dobras_vals, sexo, bf_bio or 15.0)
+        if formula_id != sugerida_id:
+            st.caption(f"💡 Sugestão: {FORMULAS_DOBRAS.get(sugerida_id,{}).get('nome','')} — {sugerida_just}")
+        bf_calculado = calcular_bf_por_formula(formula_id, dobras_vals, idade, sexo)
+        if bf_calculado:
+            st.success(f"✅ BF% calculado ({formula_lbl}): **{bf_calculado}%**  "
+                       f"| FM: {round((peso or 0)*(bf_calculado/100),1)}kg "
+                       f"| FFM: {round((peso or 0)*(1-bf_calculado/100),1)}kg")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # GRUPO 4 — CIRCUNFERÊNCIAS
+    # ════════════════════════════════════════════════════════════════════════
+    st.divider()
+    col_g4_hdr, col_g4_btn = st.columns([4, 1])
+    with col_g4_hdr:
+        st.markdown("#### 📐 Circunferências (cm)")
+    with col_g4_btn:
+        if st.button("📋 Preencher do último", key="fill_circ", use_container_width=True):
+            for k in ["cintura","ombros","peito","quadril","biceps_d","coxa_d","panturrilha_d","pescoco"]:
+                st.session_state[f"reg_{k}"] = ultimo.get(k) or ""
+
+    ci1, ci2, ci3, ci4 = st.columns(4)
+    campos_circ = [
+        ("cintura","Cintura",ci1), ("ombros","Ombros",ci2),
+        ("peito","Peito",ci3), ("quadril","Quadril",ci4),
+        ("biceps_d","Bíceps D",ci1), ("coxa_d","Coxa D",ci2),
+        ("panturrilha_d","Panturrilha D",ci3), ("pescoco","Pescoço",ci4),
+    ]
+    circ_vals = {}
+    for campo, label, col in campos_circ:
+        with col:
+            circ_vals[campo] = st.number_input(label, min_value=0.0, step=0.5,
+                value=_f(_v(campo)) or 0.0, key=f"reg_{campo}")
+
+    # ── Notas ─────────────────────────────────────────────────────────────────
+    st.divider()
+    notas = st.text_area("📝 Notas", value=str(_v("notas","") or ""), height=70, key="reg_notas")
+
+    # ── Botões de ação ────────────────────────────────────────────────────────
+    st.divider()
+    btn_label = "💾 Atualizar Registro" if is_edicao else "💾 Salvar Novo Registro"
+
+    # Calcular bf_final automático se não informado
+    def _calc_bf_final():
+        vals = [v for v in [bf_bio or None, bf_calculado] if v]
+        if not vals: return None
+        return round(sum(vals)/len(vals), 1)
+
+    bf_final_save = (bf_final_input if bf_final_input > 0
+                     else (_calc_bf_final() or None))
+    bf_calc_save  = bf_calculado or (bf_calc_input if bf_calc_input > 0 else None)
+
+    payload = {
+        "data":  str(data_reg),
+        "hora_registro": hora_reg or None,
+        # Composição
+        "peso":                float(peso)                 if peso > 0 else None,
+        "bf_bioimpedancia":    float(bf_bio)               if bf_bio > 0 else None,
+        "bf_formula":          formula_id                  if bf_calc_save else None,
+        "bf_calculado":        float(bf_calc_save)         if bf_calc_save else None,
+        "bf_final":            float(bf_final_save)        if bf_final_save else None,
+        "massa_gordura":       float(massa_gordura)        if massa_gordura > 0 else None,
+        "massa_livre_gordura": float(massa_livre_gordura)  if massa_livre_gordura > 0 else None,
+        # BIA avançada
+        "agua_total":          float(agua_total)           if agua_total > 0 else None,
+        "agua_intracelular":   float(agua_intra)           if agua_intra > 0 else None,
+        "agua_extracelular":   float(agua_extra)           if agua_extra > 0 else None,
+        "angulo_fase":         float(angulo_fase)          if angulo_fase > 0 else None,
+        "resistencia":         float(resistencia)          if resistencia > 0 else None,
+        "reactancia":          float(reactancia)           if reactancia > 0 else None,
+        # Recuperação
+        "carga_treino":        float(carga_treino)         if carga_treino > 0 else None,
+        "vfc_noturna":         float(vfc_noturna)          if vfc_noturna > 0 else None,
+        "sleep_score":         int(sleep_score)            if sleep_score > 0 else None,
+        "recovery_time":       int(recovery_time)          if recovery_time > 0 else None,
+        "fc_repouso":          int(fc_repouso)             if fc_repouso > 0 else None,
+        # Dobras
+        **{k: (float(v) if v > 0 else None) for k, v in dobras_vals.items()},
+        # Circunferências
+        **{k: (float(v) if v > 0 else None) for k, v in circ_vals.items()},
+        "notas": notas or None,
+    }
+
+    col_save, col_cancel = st.columns([2, 1])
+    with col_save:
+        if st.button(btn_label, type="primary", use_container_width=True, key="btn_salvar_reg"):
+            if is_edicao:
+                atualizar_registro(str(editando["id"]), payload)
+            else:
+                salvar_novo_registro(payload)
+            st.session_state["reg_editando"] = None
+            st.rerun()
+    with col_cancel:
+        if is_edicao:
+            if st.button("✖ Cancelar edição", use_container_width=True, key="btn_cancel_edit"):
+                st.session_state["reg_editando"] = None
+                st.rerun()
+
 
 
 def tab_avaliacao_semanal(atleta, df_historico: pd.DataFrame, fase: str):
@@ -1349,6 +1465,123 @@ O sistema detecta automaticamente e apresenta as opções — a decisão é do a
         """)
 
 
+def tab_perfil(perfil: dict) -> None:
+    """Aba de perfil do atleta + zonas de FC (Karvonen lado a lado com manual)."""
+    st.header("👤 Perfil do Atleta")
+
+    # ── Dados do perfil ───────────────────────────────────────────────────────
+    with st.form("form_perfil"):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("📋 Dados Pessoais")
+            nome      = st.text_input("Nome", value=perfil.get("nome",""))
+            dn_val    = datetime.strptime(str(perfil.get("data_nasc","1990-01-01")), "%Y-%m-%d").date()
+            data_nasc = st.date_input("Data de nascimento", value=dn_val)
+            sexo      = st.radio("Sexo biológico", ["Masculino","Feminino"],
+                           index=0 if perfil.get("sexo","Masculino")=="Masculino" else 1,
+                           horizontal=True)
+            altura    = st.number_input("Altura (cm)", min_value=140, max_value=230,
+                           value=int(float(perfil.get("altura",178))))
+            anos_tr   = st.number_input("Anos de treino", min_value=0, max_value=40,
+                           value=int(perfil.get("anos_treino",5)))
+        with col2:
+            st.subheader("🏆 Dados Competitivos")
+            cat_opts  = ["Mens Physique","Classic Physique","Bodybuilding Open",
+                         "Bikini","Wellness","Physique Feminino"]
+            cat_idx   = cat_opts.index(perfil.get("categoria","Mens Physique"))                         if perfil.get("categoria") in cat_opts else 0
+            categoria = st.selectbox("Categoria alvo", cat_opts, index=cat_idx)
+            uso_peds  = st.checkbox("Uso de PEDs / TRT", value=bool(perfil.get("uso_peds",False)))
+            bf_alvo   = st.number_input("% BF alvo no palco", min_value=2.0, max_value=20.0,
+                           value=float(perfil.get("bf_alvo",5.0)), step=0.5)
+            dc_val    = datetime.strptime(str(perfil.get("data_competicao",
+                           str(date.today()+timedelta(days=120)))), "%Y-%m-%d").date()
+            data_comp = st.date_input("Data da próxima competição", value=dc_val)
+            vfc_base  = st.number_input("VFC Baseline (média 7 dias, ms)",
+                           min_value=20.0, max_value=120.0,
+                           value=float(perfil.get("vfc_baseline",60.0)), step=1.0)
+
+        idade_calc = calcular_idade(str(data_nasc))
+        st.info(f"🎂 Idade calculada: **{idade_calc} anos**")
+
+        if st.form_submit_button("💾 Salvar Perfil", type="primary", use_container_width=True):
+            salvar_perfil({
+                "nome": nome, "data_nasc": str(data_nasc), "sexo": sexo,
+                "altura": float(altura), "anos_treino": int(anos_tr),
+                "categoria": categoria, "uso_peds": bool(uso_peds),
+                "bf_alvo": float(bf_alvo), "data_competicao": str(data_comp),
+                "vfc_baseline": float(vfc_base),
+            })
+            st.session_state["perfil"] = None  # forçar reload
+            st.rerun()
+
+    # ── Zonas de FC ───────────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("🫀 Zonas de Frequência Cardíaca")
+
+    idade_p   = calcular_idade(str(perfil.get("data_nasc","1990-01-01")))
+    ultimo    = carregar_ultimo_registro()
+    fc_rep_db = int(ultimo.get("fc_repouso") or perfil.get("fc_repouso") or 55)
+
+    # Karvonen (sempre calculado)
+    zonas_kv = calcular_zonas_karvonen(idade_p, fc_rep_db)
+
+    usar_manual = st.checkbox(
+        "Tenho laudo de ergoespirometria — quero inserir zonas personalizadas",
+        value=bool(perfil.get("zona1_min")), key="perfil_fc_manual"
+    )
+
+    nomes_z = [
+        "Zona 1 — Recuperação Ativa",
+        "Zona 2 — LISS / Fat-Burning",
+        "Zona 3 — Aeróbio Moderado",
+        "Zona 4 — Limiar Anaeróbio",
+        "Zona 5 — HIIT / Máximo",
+    ]
+    emj = ["🔵","🟢","🟡","🟠","🔴"]
+
+    if usar_manual:
+        st.caption("Preencha as zonas do laudo. Valores Karvonen mostrados ao lado para comparação.")
+        # Cabeçalho
+        h0, h1, h2, h3, h4 = st.columns([3, 1, 1, 1, 1])
+        h0.markdown("**Zona**")
+        h1.markdown("**Manual min**")
+        h2.markdown("**Manual máx**")
+        h3.markdown("**Karvonen min**")
+        h4.markdown("**Karvonen máx**")
+
+        zonas_manual = {}
+        for i, (nome_z, emj_z) in enumerate(zip(nomes_z, emj), 1):
+            kv_mn, kv_mx = list(zonas_kv.values())[i-1]
+            c0, c1, c2, c3, c4 = st.columns([3, 1, 1, 1, 1])
+            c0.markdown(f"{emj_z} {nome_z}")
+            mn = c1.number_input("min", min_value=0, step=1,
+                value=int(perfil.get(f"zona{i}_min") or 0),
+                key=f"pf_z{i}min", label_visibility="collapsed")
+            mx = c2.number_input("máx", min_value=0, step=1,
+                value=int(perfil.get(f"zona{i}_max") or 0),
+                key=f"pf_z{i}max", label_visibility="collapsed")
+            c3.markdown(f"<div style='text-align:center;padding-top:8px'>{kv_mn}</div>", unsafe_allow_html=True)
+            c4.markdown(f"<div style='text-align:center;padding-top:8px'>{kv_mx}</div>", unsafe_allow_html=True)
+            zonas_manual[f"zona{i}_min"] = mn
+            zonas_manual[f"zona{i}_max"] = mx
+
+        if st.button("💾 Salvar Zonas Personalizadas", type="secondary", key="btn_salvar_zonas"):
+            dados_z = {**perfil, **zonas_manual}
+            salvar_perfil(dados_z)
+            st.success("✅ Zonas salvas!")
+    else:
+        st.caption(f"Cálculo pela fórmula de Karvonen | FC repouso: {fc_rep_db} bpm | Idade: {idade_p} anos")
+        for nome_z, emj_z, (mn, mx) in zip(nomes_z, emj, zonas_kv.values()):
+            st.write(f"{emj_z} **{nome_z}:** {mn}–{mx} bpm")
+
+    st.divider()
+    st.caption("""
+**Karvonen:** FC treino = [(FCmáx − FCrepouso) × intensidade%] + FCrepouso
+FCmáx estimada pela fórmula de Tanaka et al. (2001): 208 − 0.7 × idade.
+Para maior precisão, realize teste ergoespirométrico.
+    """)
+
+
 def tab_referencias():
     st.header("📚 Base Científica Completa")
     st.caption("30+ referências peer-reviewed utilizadas nas recomendações do sistema.")
@@ -1365,7 +1598,6 @@ def tab_referencias():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def render_app():
-    # Carregar perfil
     if "perfil" not in st.session_state:
         st.session_state["perfil"] = carregar_perfil()
     perfil = st.session_state["perfil"]
@@ -1373,104 +1605,68 @@ def render_app():
         render_onboarding()
         return
 
-    # Carregar dados
-    df_historico = carregar_registros()
+    render_topbar(perfil)
 
-    # Carregar última medida semanal (peso, BF%, etc.)
-    medida = carregar_ultima_medida_semanal()
-    # Peso e BF% vêm das medidas semanais; fallback para histórico diário
-    peso_atual = float(medida.get("peso") or 0)
-    bf_atual   = float(medida.get("bf_final") or medida.get("bf_calculado") or
-                       medida.get("bf_bioimpedancia") or 0)
-    if peso_atual == 0 and not df_historico.empty:
-        try: peso_atual = float(df_historico.sort_values("Data").iloc[-1]["Peso"])
-        except: peso_atual = 85.0
-    if bf_atual == 0 and not df_historico.empty:
-        try: bf_atual = float(df_historico.sort_values("Data").iloc[-1]["BF_Atual"])
-        except: bf_atual = 12.0
-    if peso_atual == 0: peso_atual = 85.0
-    if bf_atual   == 0: bf_atual   = 12.0
+    # ── Dados do último registro (fonte única para o app) ─────────────────────
+    ultimo = carregar_ultimo_registro()
+    df_historico = carregar_registros()  # compatibilidade para abas que ainda usam
 
-    # Sidebar (somente dados diários)
-    p = render_sidebar(perfil)
-    # Injetar peso e BF das medidas semanais no dict p
-    p["peso_at"] = peso_atual
-    p["bf_at"]   = bf_atual
+    # Peso e BF% — vêm exclusivamente dos registros, sem fallback fixo
+    peso_atual = float(ultimo.get("peso") or 0) or None
+    bf_atual   = float(ultimo.get("bf_final") or ultimo.get("bf_calculado") or
+                       ultimo.get("bf_bioimpedancia") or 0) or None
 
-    # ── Botões CRUD diário na sidebar ─────────────────────────────────────────
-    st.sidebar.divider()
-    sel = st.session_state.get("linha_selecionada")
+    # Dados de recuperação do último registro
+    vfc_at   = float(ultimo.get("vfc_noturna")   or 0) or None
+    sleep_sc = float(ultimo.get("sleep_score")   or 0) or None
+    rec_time = float(ultimo.get("recovery_time") or 0) or None
+    fc_rep   = float(ultimo.get("fc_repouso")    or 0) or None
+    carga_tr = float(ultimo.get("carga_treino")  or 0) or None
 
-    def _build_registro_payload(data_str: str, fase_s: str, df_h: pd.DataFrame,
-                                  peso: float, bf: float) -> dict:
-        """Monta o payload do registro diário usando peso/BF das medidas semanais."""
-        atleta_t = AtletaMetrics(
-            categoria_alvo=p["categoria"], peso=peso, bf_atual=bf,
-            bf_alvo=p["bf_alvo"], idade=p["idade"], vfc_base=p["vfc_base"],
-            vfc_atual=p["vfc_at"], sleep_score=p["sleep_sc"], recovery_time=p["rec_time"],
-            fc_repouso=p["fc_rep"], carga_treino=p["carga_tr"], fase_sugerida=fase_s,
-            uso_peds=p["uso_peds"], estagnado_dias=0, data_competicao=p["data_comp"],
-            anos_treino=p.get("anos_treino",5),
-        )
-        df_d, _, _ = calcular_macros_semana(atleta_t, df_h, {})
-        try:
-            wd = datetime.strptime(data_str, "%Y-%m-%d").weekday()
-        except:
-            wd = 0
-        dh = df_d.iloc[wd]
-        return {
-            "Data": data_str, "Peso": peso, "BF_Atual": bf,
-            "Carga_Treino": p["carga_tr"], "VFC_Atual": p["vfc_at"],
-            "Sleep_Score": p["sleep_sc"], "Recovery_Time": p["rec_time"],
-            "FC_Repouso": p["fc_rep"], "Fase_Historica": fase_s,
-            "Estrategia_Dieta": dh["Estratégia"], "Calorias": dh["Calorias"],
-            "Carboidratos": dh["Carb(g)"], "Proteinas": dh["Prot(g)"], "Gorduras": dh["Gord(g)"],
-        }
+    # Perfil
+    sexo      = perfil.get("sexo","Masculino")
+    categoria = perfil.get("categoria","Mens Physique")
+    bf_alvo_p = float(perfil.get("bf_alvo",5.0))
+    dc_str    = str(perfil.get("data_competicao", str(date.today()+timedelta(days=120))))
+    data_comp = datetime.strptime(dc_str, "%Y-%m-%d").date()
+    vfc_base  = float(perfil.get("vfc_baseline",0)) or None
+    uso_peds  = bool(perfil.get("uso_peds",False))
+    idade     = calcular_idade(str(perfil.get("data_nasc","1990-01-01")))
+    anos_tr   = int(perfil.get("anos_treino",5))
+    altura    = float(perfil.get("altura",178))
 
-    if sel:
-        # BUG FIX: usar a data diretamente de linha_selecionada, não do widget
-        data_selecionada = str(sel["Data"])
-        cb1, cb2 = st.sidebar.columns(2)
-        if cb1.button("✏️ Atualizar", type="primary", use_container_width=True):
-            fase_t, _, _ = sugerir_fase_e_timeline(
-                date.today(), p["data_comp"], p["bf_at"], p["sexo"], df_historico)
-            payload = _build_registro_payload(data_selecionada, fase_t, df_historico,
-                                               peso_atual, bf_atual)
-            salvar_registro(payload)
-            st.session_state["linha_selecionada"] = None
-            st.rerun()
-        if cb2.button("🗑️ Deletar", use_container_width=True):
-            # BUG FIX: deletar pela data de linha_selecionada, não pelo widget
-            deletar_registro(data_selecionada)
-            st.session_state["linha_selecionada"] = None
-            st.rerun()
-    else:
-        if st.sidebar.button("💾 Salvar Registro do Dia", type="primary", use_container_width=True):
-            fase_t, _, _ = sugerir_fase_e_timeline(
-                date.today(), p["data_comp"], p["bf_at"], p["sexo"], df_historico)
-            payload = _build_registro_payload(
-                str(p["data_reg"]), fase_t, df_historico, peso_atual, bf_atual)
-            salvar_registro(payload)
-            st.rerun()
+    # p = dict de parâmetros passados às abas
+    p = {
+        "peso_at": peso_atual, "bf_at": bf_atual,
+        "vfc_at": vfc_at, "sleep_sc": sleep_sc, "rec_time": rec_time,
+        "fc_rep": fc_rep, "carga_tr": carga_tr,
+        "vfc_base": vfc_base,
+        "sexo": sexo, "categoria": categoria, "bf_alvo": bf_alvo_p,
+        "data_comp": data_comp, "uso_peds": uso_peds, "idade": idade,
+        "anos_treino": anos_tr, "altura": altura,
+        "data_reg": date.today(),
+    }
 
-    # ── Lógica central ────────────────────────────────────────────────────────
+    # ── Fase e atleta ─────────────────────────────────────────────────────────
+    bf_para_fase = bf_atual or 12.0  # só para sugerir fase, não travar
     fase, df_timeline, flags = sugerir_fase_e_timeline(
-        date.today(), p["data_comp"], p["bf_at"], p["sexo"], df_historico)
+        date.today(), data_comp, bf_para_fase, sexo, df_historico)
 
+    peso_para_calc = peso_atual or 80.0
+    bf_para_calc   = bf_atual   or 12.0
     atleta = AtletaMetrics(
-        categoria_alvo=p["categoria"], peso=p["peso_at"], bf_atual=p["bf_at"],
-        bf_alvo=p["bf_alvo"], idade=p["idade"], vfc_base=p["vfc_base"],
-        vfc_atual=p["vfc_at"], sleep_score=p["sleep_sc"], recovery_time=p["rec_time"],
-        fc_repouso=p["fc_rep"], carga_treino=p["carga_tr"], fase_sugerida=fase,
-        uso_peds=p["uso_peds"], estagnado_dias=0, data_competicao=p["data_comp"],
-        anos_treino=p.get("anos_treino", 5),
+        categoria_alvo=categoria, peso=peso_para_calc, bf_atual=bf_para_calc,
+        bf_alvo=bf_alvo_p, idade=idade, vfc_base=vfc_base or 60.0,
+        vfc_atual=vfc_at or 0.0, sleep_score=int(sleep_sc or 0),
+        recovery_time=int(rec_time or 0), fc_repouso=int(fc_rep or 55),
+        carga_treino=carga_tr or 0.0, fase_sugerida=fase,
+        uso_peds=uso_peds, estagnado_dias=0, data_competicao=data_comp,
+        anos_treino=anos_tr,
     )
     df_dieta, motivo_dieta, alertas = calcular_macros_semana(atleta, df_historico, flags)
-    dieta_hoje = df_dieta.iloc[p["data_reg"].weekday()]
+    dieta_hoje = df_dieta.iloc[date.today().weekday()]
 
     # ── Navegação ─────────────────────────────────────────────────────────────
-    st.title("🧬 Pro Coach IA")
-
     tabs = st.tabs([
         "🏠 Dashboard",
         "🗓️ Periodização",
@@ -1481,20 +1677,21 @@ def render_app():
         "📊 Avaliação Semanal",
         "💊 Suplementação",
         "📈 Evolução",
+        "👤 Perfil",
         "📚 Referências",
     ])
 
-    with tabs[0]: tab_dashboard(p, atleta, flags, fase, df_historico, df_timeline, dieta_hoje, df_dieta)
-    with tabs[1]: tab_periodizacao(fase, df_timeline, flags, p, atleta, df_historico)
-    with tabs[2]: tab_nutricao(fase, atleta, df_historico, flags, df_dieta, motivo_dieta, alertas, dieta_hoje, p)
-    with tabs[3]: tab_treino(fase, atleta, df_historico)
-    with tabs[4]: tab_recuperacao(atleta, df_historico, p)
-    with tabs[5]: tab_registros(p, atleta, perfil, df_historico)
-    with tabs[6]: tab_avaliacao_semanal(atleta, df_historico, fase)
-    with tabs[7]: tab_suplementacao(atleta)
-    with tabs[8]: tab_evolucao(df_historico)
-    with tabs[9]: tab_referencias()
-
+    with tabs[0]:  tab_dashboard(p, atleta, flags, fase, df_historico, df_timeline, dieta_hoje, df_dieta)
+    with tabs[1]:  tab_periodizacao(fase, df_timeline, flags, p, atleta, df_historico)
+    with tabs[2]:  tab_nutricao(fase, atleta, df_historico, flags, df_dieta, motivo_dieta, alertas, dieta_hoje, p)
+    with tabs[3]:  tab_treino(fase, atleta, df_historico)
+    with tabs[4]:  tab_recuperacao(atleta, df_historico, p)
+    with tabs[5]:  tab_registros(p, atleta, perfil)
+    with tabs[6]:  tab_avaliacao_semanal(atleta, df_historico, fase)
+    with tabs[7]:  tab_suplementacao(atleta)
+    with tabs[8]:  tab_evolucao(df_historico)
+    with tabs[9]:  tab_perfil(perfil)
+    with tabs[10]: tab_referencias()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT

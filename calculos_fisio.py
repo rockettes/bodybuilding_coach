@@ -770,7 +770,8 @@ def calcular_macros_semana(
 # ZONAS DE FC
 # ─────────────────────────────────────────────────────────────────────────────
 
-def calcular_zonas_karvonen(idade: int, fc_repouso: int) -> Dict[str, Tuple[int,int]]:
+def calcular_zonas_karvonen(idade: int, fc_repouso) -> Dict[str, Tuple[int,int]]:
+    fc_repouso = int(fc_repouso or 55)  # fallback 55 bpm se None/0
     fc_max = 208 - (0.7 * idade)
     fcr    = fc_max - fc_repouso
     return {
