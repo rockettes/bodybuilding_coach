@@ -681,6 +681,165 @@ que restrição contínua de carboidratos.
         _render_refs("Nutrição", card=True)
 
 
+def _prescrever_cardio(fase: str, atleta, df_hist: pd.DataFrame) -> dict:
+    """
+    Calcula a prescrição de cardio semanal baseada em:
+    - Fase atual (Bulking/Cutting/Peak Week/Recomposição/Off-Season)
+    - Taxa de perda atual vs. alvo
+    - Status de recuperação (VFC)
+    - Efeito de interferência (Helms et al., 2014 — cycling > running)
+    
+    Retorna dict com: sessoes_liss, min_liss, sessoes_hiit, min_hiit,
+                      kcal_estimado, modalidade_liss, protocolo_hiit,
+                      zona_liss, justificativa, alerta
+    """
+    peso    = atleta.peso or 80.0
+    vfc_at  = atleta.vfc_atual or 0
+    vfc_b   = atleta.vfc_base  or 60.0
+    queda_vfc = ((vfc_b - vfc_at) / vfc_b * 100) if vfc_b > 0 and vfc_at > 0 else 0
+    fadiga_snc = queda_vfc > 10  # VFC caiu >10% da baseline = SNC sobrecarregado
+
+    # Taxa de perda semanal atual (últimos 14 dias)
+    taxa_perda = None
+    if not df_hist.empty and "Peso" in df_hist.columns and len(df_hist) >= 2:
+        df_s = df_hist.dropna(subset=["Peso"]).sort_values("Data")
+        if len(df_s) >= 2:
+            p_ini = float(df_s["Peso"].iloc[0])
+            p_fim = float(df_s["Peso"].iloc[-1])
+            n_sem = max(1, len(df_s) / 7)
+            if p_ini > 0:
+                taxa_perda = ((p_ini - p_fim) / p_ini * 100) / n_sem  # %/semana
+
+    # Kcal queimadas estimadas: LISS ~7 kcal/kg/h · HIIT ~10 kcal/kg/h (Wilson et al., 2012)
+    KCAL_LISS_MIN = peso * 7 / 60   # kcal por minuto de LISS
+    KCAL_HIIT_MIN = peso * 10 / 60  # kcal por minuto de HIIT (+ EPOC ≈ +15%)
+
+    resultado = {
+        "sessoes_liss": 0, "min_liss": 0,
+        "sessoes_hiit": 0, "min_hiit": 0,
+        "kcal_estimado": 0,
+        "modalidade_liss": "Bicicleta ergométrica ou caminhada inclinada",
+        "protocolo_hiit": "20 s esforço máximo / 40 s recuperação ativa — 8 rounds",
+        "zona_liss": "Zona 2 (60–70% FCmáx)",
+        "justificativa": "",
+        "alerta": None,
+    }
+
+    if fase == "Bulking":
+        # Bulking: cardio mínimo para saúde cardiovascular e partição calórica
+        # Sem cardio ou mínimo (2×/sem LISS leve) — não criar déficit que atrapalhe o superávit
+        resultado.update({
+            "sessoes_liss": 2, "min_liss": 25,
+            "sessoes_hiit": 0, "min_hiit": 0,
+            "zona_liss": "Zona 1–2 (50–65% FCmáx)",
+            "modalidade_liss": "Caminhada (5–6 km/h) ou bicicleta baixa intensidade",
+            "justificativa": (
+                "**Mínimo necessário.** No bulking o cardio não deve criar déficit calórico "
+                "significativo. 2 × 25 min de LISS leve mantém saúde cardiovascular, vias "
+                "metabólicas de oxidação de gordura ativas e melhora a partição calórica "
+                "(nutrientes → músculo, não gordura). Sem HIIT: o treino de força já provê "
+                "estímulo anaeróbio suficiente. *(Helms et al., 2014; Iraki et al., 2019)*"
+            ),
+        })
+        if fadiga_snc:
+            resultado["alerta"] = "⚠️ VFC baixa — reduzir para 1 × 20 min até VFC se normalizar."
+
+    elif fase in ("Cutting", "Pre-Contest (Cutting)"):
+        # Cutting: cardio é ferramenta de apoio ao déficit — diet first
+        # Progressão baseada na taxa de perda atual vs. alvo (0.5–1.0%/sem)
+        if taxa_perda is not None and taxa_perda >= 0.8:
+            # Perda adequada ou acima: manter volume atual (leve)
+            s_liss, m_liss = 3, 35
+            s_hiit, m_hiit = 1, 20
+            just = "Perda dentro do alvo. Manter cardio moderado sem aumentar."
+        elif taxa_perda is not None and taxa_perda >= 0.5:
+            # Perda lenta: adicionar 1 sessão LISS
+            s_liss, m_liss = 4, 35
+            s_hiit, m_hiit = 1, 20
+            just = "Perda ligeiramente abaixo do alvo. Adicionar 1 sessão LISS."
+        else:
+            # Platô ou sem dados: protocolo padrão cutting
+            s_liss, m_liss = 4, 40
+            s_hiit, m_hiit = 2, 20
+            just = "Protocolo padrão cutting. Priorizar LISS — menor custo de recuperação."
+
+        # Fadiga de SNC: suspender HIIT
+        if fadiga_snc:
+            s_hiit, m_hiit = 0, 0
+            resultado["alerta"] = "🔴 VFC abaixo da baseline (>10%). HIIT suspenso — apenas LISS de baixa intensidade até recuperação."
+
+        resultado.update({
+            "sessoes_liss": s_liss, "min_liss": m_liss,
+            "sessoes_hiit": s_hiit, "min_hiit": m_hiit,
+            "zona_liss": "Zona 2 (60–70% FCmáx)",
+            "modalidade_liss": "Bicicleta ergométrica (menor interferência) ou esteira inclinada",
+            "protocolo_hiit": "30 s esforço máximo (Zona 5) / 90 s recuperação ativa (Zona 1) — 6–8 rounds",
+            "justificativa": (
+                f"{just} A dieta gera 80% do déficit — o cardio contribui com os 20% restantes "
+                "para preservar LBM. Ciclismo reduz interferência vs. corrida "
+                "*(Wilson et al., 2012; Helms et al., 2014 — grau A)*. "
+                "HIIT máx 2×/sem para não elevar cortisol e comprometer recuperação muscular. "
+                "*(Kikuchi et al., 2016)*"
+            ),
+        })
+
+    elif fase == "Peak Week":
+        # Peak Week: cardio MÍNIMO — depleção de glicogênio não deve vir do cardio
+        # Apenas LISS muito leve para manter metabolismo sem esgotar reservas
+        resultado.update({
+            "sessoes_liss": 2, "min_liss": 20,
+            "sessoes_hiit": 0, "min_hiit": 0,
+            "zona_liss": "Zona 1 (50–55% FCmáx) — walking apenas",
+            "modalidade_liss": "Caminhada leve (4–5 km/h) — sem impacto",
+            "justificativa": (
+                "**Peak Week: cardio mínimo ou zero.** A depleção de glicogênio é feita pela "
+                "dieta (baixo CHO dias 1–3), não pelo cardio. Cardio excessivo nesta semana "
+                "reduz fullness muscular no palco. Apenas caminhada leve pode ser mantida "
+                "para controle hídrico e psicológico. *(Chappell et al., 2018)*"
+            ),
+        })
+        resultado["alerta"] = "⚡ Dias 4–5 (Carb-Up): suspender todo cardio — maximizar supercompensação de glicogênio."
+
+    elif fase == "Recomposição":
+        resultado.update({
+            "sessoes_liss": 3, "min_liss": 30,
+            "sessoes_hiit": 1, "min_hiit": 15,
+            "zona_liss": "Zona 2 (60–70% FCmáx)",
+            "modalidade_liss": "Bicicleta ergométrica ou caminhada inclinada",
+            "protocolo_hiit": "20 s esforço / 40 s recuperação — 6 rounds (Tabata modificado)",
+            "justificativa": (
+                "Recomposição: déficit leve (−200 kcal/dieta). Cardio complementa sem "
+                "criar déficit excessivo que impeça síntese proteica. 1 sessão HIIT "
+                "semanal melhora sensibilidade à insulina e oxidação de gordura. "
+                "*(Barakat et al., 2020)*"
+            ),
+        })
+        if fadiga_snc:
+            resultado["sessoes_hiit"] = 0
+            resultado["min_hiit"]    = 0
+            resultado["alerta"] = "⚠️ VFC baixa — suspender HIIT esta semana."
+
+    else:  # Off-Season / manutenção
+        resultado.update({
+            "sessoes_liss": 2, "min_liss": 30,
+            "sessoes_hiit": 0, "min_hiit": 0,
+            "zona_liss": "Zona 1–2 (50–65% FCmáx)",
+            "modalidade_liss": "Qualquer modalidade de baixo impacto",
+            "justificativa": (
+                "Off-season: cardio de manutenção cardiovascular e metabólica. "
+                "Mantém vias de oxidação de gordura ativas e melhora recuperação "
+                "entre sessões de musculação. *(Helms et al., 2014)*"
+            ),
+        })
+
+    # Calcular kcal estimado da semana
+    kcal_liss = resultado["sessoes_liss"] * resultado["min_liss"] * KCAL_LISS_MIN
+    kcal_hiit = resultado["sessoes_hiit"] * resultado["min_hiit"] * KCAL_HIIT_MIN * 1.15  # +15% EPOC
+    resultado["kcal_estimado"] = round(kcal_liss + kcal_hiit)
+
+    return resultado
+
+
 def tab_treino(fase, atleta, df_hist):
     st.header("🏋️ Plano de Treino Semanal")
     df_treino, motivo = gerar_treino_semanal(atleta, exercicios_db)
@@ -689,6 +848,190 @@ def tab_treino(fase, atleta, df_hist):
     st.download_button("📥 Exportar CSV",
         data=df_treino.to_csv(sep=";", index=False),
         file_name=f"treino_{fase.lower().replace(' ','_')}.csv", mime="text/csv")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SEÇÃO DE CARDIO CARDIOVASCULAR
+    # ══════════════════════════════════════════════════════════════════════
+    st.divider()
+    st.subheader("🫀 Prescrição Cardiovascular")
+    st.caption(
+        "Cardio é ferramenta de apoio — a dieta gera o déficit principal. "
+        "Volume mínimo para atingir a meta. *(Helms et al., 2014 — grau A)*"
+    )
+
+    cardio = _prescrever_cardio(fase, atleta, df_hist)
+
+    # Alerta de VFC/fadiga no topo
+    if cardio["alerta"]:
+        st.warning(cardio["alerta"])
+
+    # ── Métricas principais ──────────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns(4)
+    total_sessoes = cardio["sessoes_liss"] + cardio["sessoes_hiit"]
+    total_min     = cardio["sessoes_liss"] * cardio["min_liss"] + \
+                    cardio["sessoes_hiit"] * cardio["min_hiit"]
+
+    c1.metric("📅 Sessões/semana",   f"{total_sessoes}",
+              help="LISS + HIIT combinados")
+    c2.metric("⏱ Minutos/semana",    f"{total_min} min",
+              help="Tempo total de cardio na semana")
+    c3.metric("🔥 Gasto estimado",   f"~{cardio['kcal_estimado']} kcal",
+              help="LISS + HIIT (inclui EPOC pós-HIIT +15%)")
+    c4.metric("📊 Fase",             fase)
+
+    st.caption(cardio["justificativa"])
+
+    # ── Tabela de sessões semanais ────────────────────────────────────────
+    dias_semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+
+    # Distribuição inteligente de sessões
+    sessoes_cardio = []
+
+    if cardio["sessoes_liss"] > 0 or cardio["sessoes_hiit"] > 0:
+        # Regra: HIIT nunca em dias consecutivos e nunca antes de treino de força pesado
+        # LISS preferível nos dias de descanso do treino ou após musculação
+        hiit_dias  = []
+        liss_dias  = []
+
+        # Posicionar HIIT: preferencialmente terça e sexta (longe do treino de perna)
+        if cardio["sessoes_hiit"] >= 1: hiit_dias.append(1)   # Terça
+        if cardio["sessoes_hiit"] >= 2: hiit_dias.append(4)   # Sexta
+
+        # LISS: distribuir nos demais dias, preferindo dias de descanso do treino
+        liss_pool = [d for d in range(7) if d not in hiit_dias]
+        import random; random.seed(42)
+        liss_selecionados = sorted(random.sample(liss_pool, min(cardio["sessoes_liss"], len(liss_pool))))
+
+        for i, dia in enumerate(dias_semana):
+            idx = i
+            tipo = "—"
+            modalidade = "—"
+            duracao = "—"
+            zona = "—"
+            kcal = "—"
+            if idx in hiit_dias:
+                tipo = "🔴 HIIT"
+                modalidade = "Bicicleta sprint / Esteira intervals"
+                duracao = f"{cardio['min_hiit']} min"
+                zona = "Zona 4–5 (80–95% FCmáx)"
+                kcal = f"~{round(cardio['min_hiit'] * atleta.peso * 10 / 60 * 1.15)} kcal (+EPOC)"
+            elif idx in liss_selecionados:
+                tipo = "🟢 LISS"
+                modalidade = cardio["modalidade_liss"]
+                duracao = f"{cardio['min_liss']} min"
+                zona = cardio["zona_liss"]
+                kcal = f"~{round(cardio['min_liss'] * atleta.peso * 7 / 60)} kcal"
+            sessoes_cardio.append({
+                "Dia": dia, "Tipo": tipo,
+                "Modalidade": modalidade, "Duração": duracao,
+                "Zona FC": zona, "Gasto est.": kcal
+            })
+
+        df_cardio = pd.DataFrame(sessoes_cardio)
+        st.dataframe(df_cardio, use_container_width=True, hide_index=True)
+
+    # ── Protocolo HIIT detalhado ──────────────────────────────────────────
+    if cardio["sessoes_hiit"] > 0:
+        with st.expander("🔴 Protocolo HIIT — Detalhado"):
+            st.markdown(f"""
+**Protocolo:** {cardio['protocolo_hiit']}
+
+| Fase | Duração | Intensidade | FC alvo |
+|------|---------|-------------|---------|
+| Aquecimento | 5 min | Zona 1 (50–55% FCmáx) | Gradual |
+| Esforço (on) | 20–30 s | Zona 5 (≥ 90% FCmáx) | Máxima |
+| Recuperação (off) | 40–90 s | Zona 1 (< 55% FCmáx) | < 120 bpm |
+| Rounds | 6–8 rounds | — | — |
+| Resfriamento | 5 min | Zona 1 | Gradual |
+
+**Modalidades recomendadas (menor interferência muscular):**
+- ✅ Bicicleta ergométrica — menor interferência em hipertrofia *(Wilson et al., 2012)*
+- ✅ Remo ergométrico — full body, sem impacto
+- ✅ Assault bike (air bike) — alta demanda cardiovascular sem corrida
+- ⚠️ Corrida — evitar se priorizando hipertrofia de pernas (maior interferência)
+- ❌ HIIT em dias consecutivos — risco de overreaching do SNC
+
+**EPOC (Excess Post-Exercise Oxygen Consumption):** o corpo continua queimando calorias
+por 12–24h após o HIIT — estimativa +15% sobre o gasto da sessão.
+*(Tremblay et al., 1994)*
+            """)
+
+    # ── Protocolo LISS detalhado ─────────────────────────────────────────
+    if cardio["sessoes_liss"] > 0:
+        with st.expander("🟢 Protocolo LISS — Detalhado"):
+            # Calcular FC alvo usando Karvonen se disponível
+            fc_rep    = int(atleta.fc_repouso or 55)
+            idade_est = 30  # fallback
+            fc_max_k  = 208 - 0.7 * idade_est
+            fcr       = fc_max_k - fc_rep
+            fc_liss_min = int(fcr * 0.60 + fc_rep)
+            fc_liss_max = int(fcr * 0.70 + fc_rep)
+
+            st.markdown(f"""
+**Modalidade:** {cardio["modalidade_liss"]}  
+**Duração:** {cardio["min_liss"]} min · **Zona:** {cardio["zona_liss"]}  
+**FC alvo (Karvonen):** {fc_liss_min}–{fc_liss_max} bpm *(configure sua FC repouso no Perfil para precisão)*
+
+| Aspecto | Detalhe |
+|---------|---------|
+| Intensidade | Deve conseguir manter uma conversa sem ofegar |
+| Timing | Preferencialmente após musculação ou em dias separados |
+| Jejum | Cardio em jejum NÃO tem vantagem sobre alimentado para perda total de gordura *(Schoenfeld et al., 2014)* |
+| Progressão | Aumentar 5 min/sessão se taxa de perda < 0.5%/semana |
+| Máximo recomendado | 5–6 sessões × 45 min = ≈ 225–270 min/semana |
+
+**Por que LISS é preferido no cutting vs. HIIT para bodybuilders:**
+- Menor elevação de cortisol → menos catabolismo muscular
+- Não compete pelo mesmo substrato energético que o treino de força
+- Permite recuperação muscular durante a sessão
+- Menor risco de lesão em estado de déficit calórico
+- *(Helms et al., 2014 — grau A; Wilson et al., 2012 — grau B)*
+            """)
+
+    # ── Calculadora de déficit de cardio ─────────────────────────────────
+    with st.expander("🧮 Calculadora de Gasto Cardio"):
+        st.caption("Estime quanto cardio adicionar para fechar um déficit calórico específico.")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            deficit_alvo = st.number_input(
+                "Déficit calórico adicional alvo (kcal/sem)",
+                min_value=0, max_value=3500, value=500, step=100,
+                help="Ex: 500 kcal/semana ≈ −0.07 kg/sem extra"
+            )
+            modalidade_calc = st.selectbox(
+                "Modalidade",
+                ["LISS — Bicicleta (7 kcal/kg/h)",
+                 "LISS — Caminhada inclinada (5 kcal/kg/h)",
+                 "LISS — Natação (8 kcal/kg/h)",
+                 "HIIT — Sprint intervals (10 kcal/kg/h + EPOC)"]
+            )
+        with col_b:
+            peso_calc = st.number_input("Peso (kg)", value=float(atleta.peso or 80.0),
+                                         min_value=40.0, max_value=200.0, step=0.5)
+            sessoes_calc = st.number_input("Nº de sessões/semana", min_value=1, max_value=7, value=3)
+
+        # Extrair taxa
+        taxa_map = {
+            "LISS — Bicicleta (7 kcal/kg/h)":          7,
+            "LISS — Caminhada inclinada (5 kcal/kg/h)": 5,
+            "LISS — Natação (8 kcal/kg/h)":             8,
+            "HIIT — Sprint intervals (10 kcal/kg/h + EPOC)": 10 * 1.15,
+        }
+        taxa_kcal_h = taxa_map[modalidade_calc]
+        kcal_por_min = peso_calc * taxa_kcal_h / 60
+
+        if deficit_alvo > 0 and sessoes_calc > 0:
+            min_por_sessao = round(deficit_alvo / (sessoes_calc * kcal_por_min))
+            st.success(
+                f"**{sessoes_calc} sessão(ões) de {min_por_sessao} min** cada "
+                f"= ~{deficit_alvo} kcal/semana extra "
+                f"(~{round(deficit_alvo/7)} kcal/dia)"
+            )
+            if min_por_sessao > 60:
+                st.warning(
+                    f"⚠️ {min_por_sessao} min/sessão é longo. Considere aumentar o número de "
+                    "sessões ou ajustar o déficit pela dieta para reduzir a duração."
+                )
 
     st.divider()
     st.subheader("📖 Fundamentos Científicos do Treino")
