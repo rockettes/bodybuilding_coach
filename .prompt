@@ -1,0 +1,4 @@
+1-ao atualizar dados no registro, sem apertar enter, os valores nao persistem no campo. ou seja, ir alterando os valores e apertando tab perde o valor anterior
+2 - permitir incluir treino manualmente
+3 - permitir alterar periodizacao manualmente
+4 - 

@@ -221,6 +221,141 @@ def deletar_registro_unificado(record_id: str) -> None:
         st.error(f"Erro ao deletar: {e}")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CRUD — TREINO MANUAL
+# ─────────────────────────────────────────────────────────────────────────────
+
+def carregar_treino_manual() -> pd.DataFrame:
+    try:
+        r = _client().table("treino_manual") \
+            .select("*").eq("user_id", get_uid()) \
+            .order("created_at", desc=False).execute()
+        if r.data:
+            df = pd.DataFrame(r.data)
+            cols = ["id","treino","exercicio","series","reps","rir","descanso_s","musculo","notas"]
+            for c in cols:
+                if c not in df.columns:
+                    df[c] = None
+            return df[cols]
+        return pd.DataFrame(columns=["id","treino","exercicio","series","reps","rir","descanso_s","musculo","notas"])
+    except Exception as e:
+        st.error(f"Erro ao carregar treino manual: {e}")
+        return pd.DataFrame(columns=["id","treino","exercicio","series","reps","rir","descanso_s","musculo","notas"])
+
+def salvar_treino_manual(df: pd.DataFrame) -> None:
+    """Substitui todo o treino manual do atleta (delete + insert)."""
+    uid = get_uid()
+    try:
+        _client().table("treino_manual").delete().eq("user_id", uid).execute()
+        rows = df.copy()
+        rows["user_id"] = uid
+        # Renomear colunas do treino automático para snake_case do DB
+        col_map = {
+            "Treino":"treino","Exercício":"exercicio","Séries":"series",
+            "Reps":"reps","RIR":"rir","Descanso(s)":"descanso_s","Músculo":"musculo","Notas":"notas",
+        }
+        rows = rows.rename(columns=col_map)
+        db_cols = ["user_id","treino","exercicio","series","reps","rir","descanso_s","musculo","notas"]
+        rows = rows[[c for c in db_cols if c in rows.columns]]
+        rows = rows.where(pd.notnull(rows), None)
+        data = rows.to_dict(orient="records")
+        if data:
+            _client().table("treino_manual").insert(data).execute()
+        st.toast("✅ Treino manual salvo.")
+        st.session_state.pop("treino_manual_cache", None)
+    except Exception as e:
+        st.error(f"Erro ao salvar treino manual: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CRUD — PERIODIZAÇÃO MANUAL
+# ─────────────────────────────────────────────────────────────────────────────
+
+def carregar_periodizacao_manual() -> pd.DataFrame:
+    try:
+        r = _client().table("periodizacao_manual") \
+            .select("*").eq("user_id", get_uid()) \
+            .order("inicio", desc=False).execute()
+        if r.data:
+            df = pd.DataFrame(r.data)
+            for c in ["id","fase","inicio","fim","objetivo","notas"]:
+                if c not in df.columns:
+                    df[c] = None
+            return df[["id","fase","inicio","fim","objetivo","notas"]]
+        return pd.DataFrame(columns=["id","fase","inicio","fim","objetivo","notas"])
+    except Exception as e:
+        st.error(f"Erro ao carregar periodização manual: {e}")
+        return pd.DataFrame(columns=["id","fase","inicio","fim","objetivo","notas"])
+
+def salvar_periodizacao_manual(df: pd.DataFrame) -> None:
+    uid = get_uid()
+    try:
+        _client().table("periodizacao_manual").delete().eq("user_id", uid).execute()
+        rows = df.copy()
+        rows["user_id"] = uid
+        col_map = {"Fase":"fase","Inicio":"inicio","Fim":"fim","Objetivo":"objetivo","Notas":"notas"}
+        rows = rows.rename(columns=col_map)
+        for c in ["inicio","fim"]:
+            if c in rows.columns:
+                rows[c] = pd.to_datetime(rows[c], errors="coerce").dt.strftime("%Y-%m-%d")
+        db_cols = ["user_id","fase","inicio","fim","objetivo","notas"]
+        rows = rows[[c for c in db_cols if c in rows.columns]]
+        rows = rows.where(pd.notnull(rows), None)
+        data = [r for r in rows.to_dict(orient="records") if r.get("fase")]
+        if data:
+            _client().table("periodizacao_manual").insert(data).execute()
+        st.toast("✅ Periodização manual salva.")
+        st.session_state.pop("periodizacao_manual_cache", None)
+    except Exception as e:
+        st.error(f"Erro ao salvar periodização manual: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CRUD — DIETA MANUAL
+# ─────────────────────────────────────────────────────────────────────────────
+
+def carregar_dieta_manual() -> pd.DataFrame:
+    try:
+        r = _client().table("dieta_manual") \
+            .select("*").eq("user_id", get_uid()) \
+            .order("created_at", desc=False).execute()
+        if r.data:
+            df = pd.DataFrame(r.data)
+            for c in ["id","data_ref","refeicao","alimento","qtd","calorias","proteina","carboidrato","gordura","notas"]:
+                if c not in df.columns:
+                    df[c] = None
+            return df[["id","data_ref","refeicao","alimento","qtd","calorias","proteina","carboidrato","gordura","notas"]]
+        return pd.DataFrame(columns=["id","data_ref","refeicao","alimento","qtd","calorias","proteina","carboidrato","gordura","notas"])
+    except Exception as e:
+        st.error(f"Erro ao carregar dieta manual: {e}")
+        return pd.DataFrame(columns=["id","data_ref","refeicao","alimento","qtd","calorias","proteina","carboidrato","gordura","notas"])
+
+def salvar_dieta_manual(df: pd.DataFrame, data_ref: str) -> None:
+    uid = get_uid()
+    try:
+        _client().table("dieta_manual").delete() \
+            .eq("user_id", uid).eq("data_ref", data_ref).execute()
+        rows = df.copy()
+        rows["user_id"] = uid
+        rows["data_ref"] = data_ref
+        col_map = {
+            "Refeição":"refeicao","Alimento":"alimento","Qtd":"qtd",
+            "Calorias":"calorias","Proteína(g)":"proteina",
+            "Carb(g)":"carboidrato","Gordura(g)":"gordura","Notas":"notas",
+        }
+        rows = rows.rename(columns=col_map)
+        db_cols = ["user_id","data_ref","refeicao","alimento","qtd","calorias","proteina","carboidrato","gordura","notas"]
+        rows = rows[[c for c in db_cols if c in rows.columns]]
+        rows = rows.where(pd.notnull(rows), None)
+        data = [r for r in rows.to_dict(orient="records") if r.get("refeicao") or r.get("alimento")]
+        if data:
+            _client().table("dieta_manual").insert(data).execute()
+        st.toast("✅ Dieta manual salva.")
+        st.session_state.pop("dieta_manual_cache", None)
+    except Exception as e:
+        st.error(f"Erro ao salvar dieta manual: {e}")
+
+
 # Compatibilidade retroativa (usadas em partes não refatoradas ainda)
 def carregar_registros() -> pd.DataFrame:
     df = carregar_todos_registros()
@@ -565,6 +700,122 @@ def tab_periodizacao(fase, df_timeline, flags, p, atleta, df_hist):
         fig.update_yaxes(autorange="reversed")
         st.plotly_chart(fig, use_container_width=True)
 
+    # ══════════════════════════════════════════════════════════════════════
+    # PERIODIZAÇÃO MANUAL — adicional à automática
+    # ══════════════════════════════════════════════════════════════════════
+    st.divider()
+    st.subheader("📅 Periodização Manual")
+    st.caption(
+        "Defina suas próprias fases aqui. "
+        "Não substitui o cálculo automático — ambos são exibidos. "
+        "Edite diretamente nas células ou importe um CSV."
+    )
+
+    _COLUNAS_PERIOD = ["Fase", "Inicio", "Fim", "Objetivo", "Notas"]
+
+    # Carregar do Supabase na primeira vez
+    if "periodizacao_manual_df" not in st.session_state:
+        raw_p = carregar_periodizacao_manual()
+        if not raw_p.empty:
+            col_map_p = {"fase":"Fase","inicio":"Inicio","fim":"Fim","objetivo":"Objetivo","notas":"Notas"}
+            raw_p = raw_p.drop(columns=["id"], errors="ignore").rename(columns=col_map_p)
+            st.session_state["periodizacao_manual_df"] = raw_p[[c for c in _COLUNAS_PERIOD if c in raw_p.columns]]
+        else:
+            st.session_state["periodizacao_manual_df"] = pd.DataFrame(columns=_COLUNAS_PERIOD)
+
+    # ── Import CSV de periodização ────────────────────────────────────────
+    with st.expander("📂 Importar periodização por CSV"):
+        st.caption(
+            f"Colunas: `{' | '.join(_COLUNAS_PERIOD)}`  \n"
+            "Datas no formato `AAAA-MM-DD` (ex: `2025-03-01`)"
+        )
+        _ph = st.checkbox(
+            "O arquivo CSV possui cabeçalho (primeira linha = nomes das colunas)",
+            value=True, key="period_csv_header",
+        )
+        _pf = st.file_uploader("Selecione o arquivo .csv", type=["csv"], key="period_csv_upload")
+        if _pf is not None:
+            try:
+                _dfp = pd.read_csv(_pf, sep=None, engine="python", header=0 if _ph else None)
+                if not _ph:
+                    n = min(len(_COLUNAS_PERIOD), len(_dfp.columns))
+                    _dfp.columns = list(_COLUNAS_PERIOD[:n]) + list(_dfp.columns[n:])
+                _cols_p = [c for c in _COLUNAS_PERIOD if c in _dfp.columns]
+                st.session_state["periodizacao_manual_df"] = _dfp[_cols_p].copy()
+                st.success(f"✅ {len(_dfp)} fases importadas.")
+            except Exception as _ep:
+                st.error(f"Erro ao ler CSV: {_ep}")
+
+    # ── Editor de periodização manual ─────────────────────────────────────
+    st.markdown("**✏️ Fases manuais (clique nas células para editar):**")
+    _dfp_edit = st.data_editor(
+        st.session_state["periodizacao_manual_df"],
+        num_rows="dynamic",
+        use_container_width=True,
+        key="periodizacao_manual_editor",
+        column_config={
+            "Fase":     st.column_config.TextColumn("Fase"),
+            "Inicio":   st.column_config.DateColumn("Início",  format="YYYY-MM-DD"),
+            "Fim":      st.column_config.DateColumn("Fim",     format="YYYY-MM-DD"),
+            "Objetivo": st.column_config.TextColumn("Objetivo"),
+            "Notas":    st.column_config.TextColumn("Notas"),
+        },
+    )
+    st.session_state["periodizacao_manual_df"] = _dfp_edit
+
+    # ── Botões Salvar / Limpar ────────────────────────────────────────────
+    _pp1, _pp2, _pp3 = st.columns([2, 1, 1])
+    if _pp1.button("💾 Salvar periodização manual no banco", key="btn_salvar_period_manual",
+                   type="primary", use_container_width=True):
+        salvar_periodizacao_manual(_dfp_edit)
+    if _pp3.button("🗑️ Limpar", key="btn_limpar_period_manual", use_container_width=True):
+        st.session_state["periodizacao_manual_df"] = pd.DataFrame(columns=_COLUNAS_PERIOD)
+        salvar_periodizacao_manual(pd.DataFrame(columns=_COLUNAS_PERIOD))
+        st.rerun()
+
+    # ── Timeline manual (se houver dados válidos) ─────────────────────────
+    _dfp_valid = _dfp_edit.dropna(subset=["Fase","Inicio","Fim"])
+    if not _dfp_valid.empty:
+        try:
+            _dfp_valid = _dfp_valid.copy()
+            _dfp_valid["Inicio"] = pd.to_datetime(_dfp_valid["Inicio"])
+            _dfp_valid["Fim"]    = pd.to_datetime(_dfp_valid["Fim"])
+            st.markdown("**📊 Timeline manual:**")
+            _fig_m = px.timeline(
+                _dfp_valid, x_start="Inicio", x_end="Fim", y="Fase",
+                color="Fase", color_discrete_sequence=px.colors.qualitative.Set2,
+                title="Periodização Manual",
+            )
+            _fig_m.add_vline(x=datetime.today().strftime("%Y-%m-%d"),
+                             line_width=2, line_dash="dash", line_color="crimson")
+            _fig_m.add_annotation(x=datetime.today().strftime("%Y-%m-%d"), y=1.05, yref="paper",
+                text="HOJE", showarrow=False, font=dict(color="crimson", size=12),
+                bgcolor="rgba(255,255,255,0.8)")
+            _fig_m.update_yaxes(autorange="reversed")
+            st.plotly_chart(_fig_m, use_container_width=True)
+        except Exception as _ef:
+            st.caption(f"⚠️ Verifique o formato das datas: {_ef}")
+
+    # ── Export periodização ────────────────────────────────────────────────
+    if not df_timeline.empty or not _dfp_edit.empty:
+        _opcoes_p = ["🤖 Automática (calculada)"]
+        if not _dfp_edit.empty:
+            _opcoes_p += ["📅 Manual", "📋 Ambas"]
+        _exp_p = st.selectbox("📥 Exportar periodização:", _opcoes_p, key="period_export_choice")
+        if _exp_p == "🤖 Automática (calculada)":
+            _dfpe = df_timeline; _fnp = "periodizacao_auto.csv"
+        elif _exp_p == "📅 Manual":
+            _dfpe = _dfp_edit; _fnp = "periodizacao_manual.csv"
+        else:
+            _dfpe = pd.concat(
+                [df_timeline.assign(Origem="Automática"), _dfp_edit.assign(Origem="Manual")],
+                ignore_index=True,
+            ); _fnp = "periodizacao_completa.csv"
+        st.download_button(
+            f"⬇️ Baixar: {_exp_p}", data=_dfpe.to_csv(sep=";", index=False),
+            file_name=_fnp, mime="text/csv", key="btn_export_period",
+        )
+
     st.divider()
     st.subheader("📖 Fundamentos Científicos da Periodização")
 
@@ -603,36 +854,139 @@ por 14 dias consecutivos *(Peos et al., 2019)*.
 
 
 def tab_nutricao(fase, atleta, df_hist, flags, df_dieta, motivo_dieta, alertas, dieta_hoje, p):
-    st.header("🍽️ Nutrição Adaptativa")
+    st.header("🍽️ Nutrição & Suplementação")
 
     # Alertas adaptativos
     for key, msg in alertas.items():
         if key == "get_base":        st.caption(f"⚙️ {msg}")
         elif "⚠️" in msg or "🔴" in msg: st.warning(msg)
 
-    col_n, col_z = st.columns([2,1])
+    # ── Plano semanal automático ──────────────────────────────────────────
+    st.subheader(f"🤖 Plano Semanal Automático — {fase}")
+    st.caption(motivo_dieta)
+    st.markdown(
+        f"**HOJE ({dieta_hoje['Dia']}):** {dieta_hoje['Estratégia']} → "
+        f"**{dieta_hoje['Calorias']} kcal** | "
+        f"P: {dieta_hoje['Prot(g)']}g | C: {dieta_hoje['Carb(g)']}g | G: {dieta_hoje['Gord(g)']}g"
+    )
+    st.dataframe(df_dieta, use_container_width=True, hide_index=True)
 
-    with col_n:
-        st.subheader(f"Plano Semanal — {fase}")
-        st.caption(motivo_dieta)
-        st.markdown(
-            f"**HOJE ({dieta_hoje['Dia']}):** {dieta_hoje['Estratégia']} → "
-            f"**{dieta_hoje['Calorias']} kcal** | "
-            f"P: {dieta_hoje['Prot(g)']}g | C: {dieta_hoje['Carb(g)']}g | G: {dieta_hoje['Gord(g)']}g"
+    # ══════════════════════════════════════════════════════════════════════
+    # DIETA MANUAL
+    # ══════════════════════════════════════════════════════════════════════
+    st.divider()
+    st.subheader("📝 Dieta Manual")
+    st.caption(
+        "Registre sua dieta real aqui. Não substitui o plano automático — ambos ficam visíveis. "
+        "Campos: **Refeição · Alimento · Qtd** (obrigatórios) + calorias e macros opcionais."
+    )
+
+    _COLUNAS_DIETA = ["Refeição","Alimento","Qtd","Calorias","Proteína(g)","Carb(g)","Gordura(g)","Notas"]
+
+    # Data de referência para a dieta manual
+    _data_dieta_ref = st.date_input(
+        "📅 Data de referência da dieta manual",
+        value=date.today(),
+        key="dieta_manual_data_ref",
+    )
+    _data_ref_str = str(_data_dieta_ref)
+
+    # Carregar do Supabase quando a data muda
+    _cache_key = f"dieta_manual_df_{_data_ref_str}"
+    if _cache_key not in st.session_state:
+        raw_d = carregar_dieta_manual()
+        if not raw_d.empty:
+            raw_d_filt = raw_d[raw_d["data_ref"] == _data_ref_str].copy() if "data_ref" in raw_d.columns else raw_d.copy()
+            col_map_d = {
+                "refeicao":"Refeição","alimento":"Alimento","qtd":"Qtd",
+                "calorias":"Calorias","proteina":"Proteína(g)",
+                "carboidrato":"Carb(g)","gordura":"Gordura(g)","notas":"Notas",
+            }
+            raw_d_filt = raw_d_filt.drop(columns=["id","data_ref","user_id"], errors="ignore").rename(columns=col_map_d)
+            raw_d_filt = raw_d_filt[[c for c in _COLUNAS_DIETA if c in raw_d_filt.columns]]
+            st.session_state[_cache_key] = raw_d_filt if not raw_d_filt.empty else pd.DataFrame(columns=_COLUNAS_DIETA)
+        else:
+            st.session_state[_cache_key] = pd.DataFrame(columns=_COLUNAS_DIETA)
+
+    # ── Import CSV de dieta ───────────────────────────────────────────────
+    with st.expander("📂 Importar dieta por CSV"):
+        st.caption(
+            f"Colunas: `{' | '.join(_COLUNAS_DIETA)}`  \n"
+            "Apenas **Refeição**, **Alimento** e **Qtd** são obrigatórios. "
+            "Calorias e macros são opcionais."
         )
-        st.dataframe(df_dieta, use_container_width=True, hide_index=True)
+        _dh = st.checkbox(
+            "O arquivo CSV possui cabeçalho (primeira linha = nomes das colunas)",
+            value=True, key="dieta_csv_header",
+        )
+        _df_dieta_file = st.file_uploader("Selecione o arquivo .csv", type=["csv"], key="dieta_csv_upload")
+        if _df_dieta_file is not None:
+            try:
+                _df_dieta_csv = pd.read_csv(_df_dieta_file, sep=None, engine="python",
+                                            header=0 if _dh else None)
+                if not _dh:
+                    n = min(len(_COLUNAS_DIETA), len(_df_dieta_csv.columns))
+                    _df_dieta_csv.columns = list(_COLUNAS_DIETA[:n]) + list(_df_dieta_csv.columns[n:])
+                _cols_d = [c for c in _COLUNAS_DIETA if c in _df_dieta_csv.columns]
+                st.session_state[_cache_key] = _df_dieta_csv[_cols_d].copy()
+                st.success(f"✅ {len(_df_dieta_csv)} linhas importadas.")
+            except Exception as _ed:
+                st.error(f"Erro ao ler CSV: {_ed}")
 
-    with col_z:
-        st.subheader("🏃 Zonas FC (Karvonen)")
-        fc_rep_z = int(p.get("fc_rep") or 55)
-        if not p.get("fc_rep"):
-            st.caption("⚠️ FC Repouso não registrada — usando 55 bpm como referência. Registre na aba 📁 Registros.")
-        zonas = calcular_zonas_karvonen(int(p["idade"]), fc_rep_z)
-        emj = {"Zona 1 (Recuperação Ativa)":"🔵","Zona 2 (LISS / Fat-Burning)":"🟢",
-               "Zona 3 (Aeróbio Moderado)":"🟡","Zona 4 (Limiar Anaeróbio)":"🟠","Zona 5 (HIIT / Máximo)":"🔴"}
-        for z,(mn,mx) in zonas.items():
-            st.write(f"{emj.get(z,'')} **{z}:** {mn}–{mx} bpm")
+    # ── Editor dieta manual ───────────────────────────────────────────────
+    st.markdown("**✏️ Editar dieta (clique nas células para editar):**")
+    _df_dieta_edit = st.data_editor(
+        st.session_state[_cache_key],
+        num_rows="dynamic",
+        use_container_width=True,
+        key="dieta_manual_editor",
+        column_config={
+            "Refeição":    st.column_config.TextColumn("Refeição",   help="Ex: Café da manhã"),
+            "Alimento":    st.column_config.TextColumn("Alimento",   help="Ex: Frango grelhado"),
+            "Qtd":         st.column_config.TextColumn("Qtd",        help="Ex: 200g ou 1 unidade"),
+            "Calorias":    st.column_config.NumberColumn("Calorias", min_value=0, format="%d"),
+            "Proteína(g)": st.column_config.NumberColumn("Prot(g)",  min_value=0, format="%.1f"),
+            "Carb(g)":     st.column_config.NumberColumn("Carb(g)",  min_value=0, format="%.1f"),
+            "Gordura(g)":  st.column_config.NumberColumn("Gord(g)",  min_value=0, format="%.1f"),
+            "Notas":       st.column_config.TextColumn("Notas"),
+        },
+    )
+    st.session_state[_cache_key] = _df_dieta_edit
 
+    # ── Totais automáticos ────────────────────────────────────────────────
+    _cols_num = ["Calorias","Proteína(g)","Carb(g)","Gordura(g)"]
+    if not _df_dieta_edit.empty:
+        _totais = {}
+        for _c in _cols_num:
+            if _c in _df_dieta_edit.columns:
+                _totais[_c] = pd.to_numeric(_df_dieta_edit[_c], errors="coerce").sum()
+        if any(v > 0 for v in _totais.values()):
+            _t1, _t2, _t3, _t4 = st.columns(4)
+            _t1.metric("Total kcal",    f"{_totais.get('Calorias',0):.0f}")
+            _t2.metric("Proteína",      f"{_totais.get('Proteína(g)',0):.1f}g")
+            _t3.metric("Carb",          f"{_totais.get('Carb(g)',0):.1f}g")
+            _t4.metric("Gordura",       f"{_totais.get('Gordura(g)',0):.1f}g")
+
+    # ── Botões Salvar / Limpar / Export ───────────────────────────────────
+    _db1, _db2, _db3 = st.columns([2, 1, 1])
+    if _db1.button("💾 Salvar dieta manual no banco", key="btn_salvar_dieta_manual",
+                   type="primary", use_container_width=True):
+        salvar_dieta_manual(_df_dieta_edit, _data_ref_str)
+    if _db3.button("🗑️ Limpar", key="btn_limpar_dieta_manual", use_container_width=True):
+        st.session_state[_cache_key] = pd.DataFrame(columns=_COLUNAS_DIETA)
+        salvar_dieta_manual(pd.DataFrame(columns=_COLUNAS_DIETA), _data_ref_str)
+        st.rerun()
+
+    st.download_button(
+        "⬇️ Exportar dieta manual (.csv)",
+        data=_df_dieta_edit.to_csv(sep=";", index=False),
+        file_name=f"dieta_manual_{_data_ref_str}.csv",
+        mime="text/csv", key="btn_export_dieta_manual",
+    )
+
+    # ══════════════════════════════════════════════════════════════════════
+    # FUNDAMENTOS CIENTÍFICOS DA NUTRIÇÃO
+    # ══════════════════════════════════════════════════════════════════════
     st.divider()
     st.subheader("📖 Fundamentos Científicos da Nutrição")
 
@@ -679,6 +1033,49 @@ que restrição contínua de carboidratos.
 
     with st.expander("📚 Referências — Nutrição"):
         _render_refs("Nutrição", card=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SUPLEMENTAÇÃO (incorporada aqui, aba própria removida)
+    # ══════════════════════════════════════════════════════════════════════
+    st.divider()
+    st.subheader("💊 Suplementação")
+    st.caption("Apenas suplementos com evidência Grau A ou B incluídos.")
+    st.dataframe(recomendar_suplementos(atleta), use_container_width=True, hide_index=True)
+
+    with st.expander("Creatina Monoidratada — Kreider et al. (2017)", expanded=True):
+        st.markdown("""
+**Dose:** 3–5g/dia, uso contínuo sem necessidade de ciclar.
+
+Suplemento com maior body of evidence em esportes de força. Aumenta PCr intramuscular,
+permitindo maior ressíntese de ATP durante esforços máximos curtos.
+Efeitos: +5-15% em força, +1-2kg de massa magra no longo prazo.
+
+**Timing:** qualquer horário — o efeito é de saturação muscular crônica, não agudo.
+        """)
+
+    with st.expander("Cafeína — Grgic et al. (2019)"):
+        st.markdown("""
+**Dose:** 3–6mg/kg de peso corporal, 45-60min pré-treino.
+
+Bloqueia receptores de adenosina → reduz percepção de esforço e fadiga central.
+Melhora performance em força, resistência muscular e potência.
+
+**Atenção:** tolerância se desenvolve com uso diário — ciclar ou usar só em treinos
+de alta intensidade maximiza o efeito ergogênico.
+        """)
+
+    with st.expander("Beta-Alanina — Hobson et al. (2012)"):
+        st.markdown("""
+**Dose:** 3.2–6.4g/dia em doses divididas (para minimizar parestesia).
+
+Precursor de carnosina intramuscular → tamponamento de H+ → reduz acidose
+metabólica → aumenta capacidade de trabalho em séries de 8-15 reps.
+
+Especialmente útil em treinos de alto volume (cutting e bulking com drop-sets).
+        """)
+
+    with st.expander("📚 Referências — Suplementação"):
+        _render_refs("Suplementação", card=True)
 
 
 def _prescrever_cardio(fase: str, atleta, df_hist: pd.DataFrame) -> dict:
@@ -848,6 +1245,104 @@ def tab_treino(fase, atleta, df_hist):
     st.download_button("📥 Exportar CSV",
         data=df_treino.to_csv(sep=";", index=False),
         file_name=f"treino_{fase.lower().replace(' ','_')}.csv", mime="text/csv")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TREINO MANUAL — adicional ao treino automático
+    # ══════════════════════════════════════════════════════════════════════
+    st.divider()
+    st.subheader("📝 Treino Manual")
+    st.caption(
+        "Registre seu próprio treino aqui. "
+        "Não substitui o treino automático — ambos aparecem lado a lado. "
+        "Edite diretamente nas células da tabela ou importe um arquivo CSV."
+    )
+
+    # Colunas mapeadas para o banco (snake_case exibido como display)
+    _COLUNAS_TREINO = ["Treino","Exercício","Séries","Reps","RIR","Descanso(s)","Músculo","Notas"]
+
+    # Carregar do Supabase na primeira vez (cache por sessão)
+    if "treino_manual_df" not in st.session_state:
+        raw = carregar_treino_manual()
+        if not raw.empty:
+            col_map_inv = {
+                "treino":"Treino","exercicio":"Exercício","series":"Séries",
+                "reps":"Reps","rir":"RIR","descanso_s":"Descanso(s)",
+                "musculo":"Músculo","notas":"Notas",
+            }
+            raw = raw.drop(columns=["id"], errors="ignore").rename(columns=col_map_inv)
+            st.session_state["treino_manual_df"] = raw[[c for c in _COLUNAS_TREINO if c in raw.columns]]
+        else:
+            st.session_state["treino_manual_df"] = pd.DataFrame(columns=_COLUNAS_TREINO)
+
+    # ── Import CSV ────────────────────────────────────────────────────────
+    with st.expander("📂 Importar treino por CSV"):
+        st.caption(
+            f"O arquivo deve seguir a ordem das colunas: "
+            f"`{' | '.join(_COLUNAS_TREINO)}`"
+        )
+        _has_header = st.checkbox(
+            "O arquivo CSV possui cabeçalho (primeira linha = nomes das colunas)",
+            value=True, key="treino_csv_header",
+        )
+        _csv_file = st.file_uploader("Selecione o arquivo .csv", type=["csv"], key="treino_csv_upload")
+        if _csv_file is not None:
+            try:
+                _df_csv = pd.read_csv(_csv_file, sep=None, engine="python",
+                                      header=0 if _has_header else None)
+                if not _has_header:
+                    n = min(len(_COLUNAS_TREINO), len(_df_csv.columns))
+                    _df_csv.columns = list(_COLUNAS_TREINO[:n]) + list(_df_csv.columns[n:])
+                _cols_ok = [c for c in _COLUNAS_TREINO if c in _df_csv.columns]
+                st.session_state["treino_manual_df"] = _df_csv[_cols_ok].copy()
+                st.success(f"✅ {len(_df_csv)} linhas importadas.")
+            except Exception as _e:
+                st.error(f"Erro ao ler CSV: {_e}")
+
+    # ── Editor manual ─────────────────────────────────────────────────────
+    st.markdown("**✏️ Editar treino manual (clique nas células para editar):**")
+    _df_edit = st.data_editor(
+        st.session_state["treino_manual_df"],
+        num_rows="dynamic",
+        use_container_width=True,
+        key="treino_manual_editor",
+        column_config={c: st.column_config.TextColumn(c) for c in _COLUNAS_TREINO},
+    )
+    st.session_state["treino_manual_df"] = _df_edit
+
+    # ── Botões Salvar / Limpar ────────────────────────────────────────────
+    _bm1, _bm2, _bm3 = st.columns([2, 1, 1])
+    if _bm1.button("💾 Salvar treino manual no banco", key="btn_salvar_treino_manual",
+                   type="primary", use_container_width=True):
+        salvar_treino_manual(_df_edit)
+    if _bm3.button("🗑️ Limpar", key="btn_limpar_treino_manual", use_container_width=True):
+        st.session_state["treino_manual_df"] = pd.DataFrame(columns=_COLUNAS_TREINO)
+        salvar_treino_manual(pd.DataFrame(columns=_COLUNAS_TREINO))
+        st.rerun()
+
+    # ── Export com seleção ────────────────────────────────────────────────
+    st.divider()
+    _tem_manual = not st.session_state["treino_manual_df"].empty
+    _opcoes_export = ["🤖 Treino automático"]
+    if _tem_manual:
+        _opcoes_export += ["📝 Treino manual", "📋 Ambos (automático + manual)"]
+
+    _export_choice = st.selectbox("📥 Exportar como CSV:", _opcoes_export, key="treino_export_choice")
+    if _export_choice == "🤖 Treino automático":
+        _df_export = df_treino; _fname = f"treino_auto_{fase.lower().replace(' ','_')}.csv"
+    elif _export_choice == "📝 Treino manual":
+        _df_export = st.session_state["treino_manual_df"]; _fname = f"treino_manual_{fase.lower().replace(' ','_')}.csv"
+    else:
+        _df_export = pd.concat(
+            [df_treino.assign(Origem="Automático"),
+             st.session_state["treino_manual_df"].assign(Origem="Manual")],
+            ignore_index=True,
+        ); _fname = f"treino_completo_{fase.lower().replace(' ','_')}.csv"
+
+    st.download_button(
+        f"⬇️ Baixar: {_export_choice}",
+        data=_df_export.to_csv(sep=";", index=False),
+        file_name=_fname, mime="text/csv", key="btn_export_treino_final",
+    )
 
     # ══════════════════════════════════════════════════════════════════════
     # SEÇÃO DE CARDIO CARDIOVASCULAR
@@ -1543,216 +2038,212 @@ def tab_registros(p: dict, atleta, perfil: dict):
         if d_col.button("🗑️ Deletar", type="secondary", use_container_width=True, key="btn_del"):
             deletar_registro_unificado(str(editando["id"]))
             st.session_state["reg_editando"] = None
-            st.session_state["_reg_pending"] = None   # limpar form
+            st.session_state["_reg_pending"] = None
             st.rerun()
     else:
         st.subheader("➕ Novo Registro")
 
-    # ─── DATA E HORA ──────────────────────────────────────────────────────────
-    # Chave inclui o id do registro editado → widget recriado em cada nova seleção
-    st.markdown("#### 📅 Data e Hora")
-    now = datetime.now()
-    _rec_key = str(editando.get("id","new")) if is_edicao else "new"
+    # ─── Botão de pré-preenchimento — FORA do form (não dispara rerun no Tab) ─
+    _fc1, _fc2 = st.columns([4, 1])
+    _fc1.caption(
+        "💡 Preencha os campos e clique **Salvar**. "
+        "Use **📋 Último registro** para copiar os valores mais recentes. "
+        "Pressione Tab livremente entre campos — os valores são preservados."
+    )
+    if _fc2.button("📋 Último registro", key="fill_all", use_container_width=True):
+        st.session_state["_reg_pending"] = carregar_ultimo_registro()
+        st.rerun()
 
-    col_d, col_h = st.columns(2)
-    with col_d:
-        if is_edicao:
-            data_default = datetime.strptime(str(editando.get("data", now.strftime("%Y-%m-%d"))), "%Y-%m-%d").date()
-        else:
-            data_default = now.date()
-        data_reg = st.date_input("Data", value=data_default, key=f"reg_data_{_rec_key}")
-    with col_h:
-        hora_reg = st.text_input("Hora (HH:MM)", key="reg_hora")
-
+    # ─── FORMULÁRIO ──────────────────────────────────────────────────────────
+    # st.form() agrupa todos os inputs: nenhum rerun ocorre ao pressionar Tab ou
+    # ao mudar de campo. O rerun só é disparado quando o usuário clica em Salvar.
+    # Isso resolve definitivamente a perda de valores ao navegar com Tab.
     sexo  = p.get("sexo","Masculino")
     idade = p.get("idade", 30)
+    now   = datetime.now()
+    _rec_key = str(editando.get("id","new")) if is_edicao else "new"
 
-    # ═══════════════════════════════════════════════════════════════════════
-    # GRUPO 1 — COMPOSIÇÃO CORPORAL
-    # ═══════════════════════════════════════════════════════════════════════
-    st.divider()
-    g1h, g1b = st.columns([4, 1])
-    g1h.markdown("#### ⚖️ Composição Corporal")
-    g1h.caption("Dados diretos da balança de bioimpedância ou calculados por dobras.")
-    if g1b.button("📋 Último registro", key="fill_comp", use_container_width=True):
-        st.session_state["_reg_pending"] = carregar_ultimo_registro()
-        st.rerun()
-
-    cc1, cc2, cc3 = st.columns(3)
-    with cc1:
-        peso                = st.number_input("Peso (kg)",            min_value=0.0, max_value=300.0, step=0.05, format="%.2f", key="reg_peso")
-        massa_gordura       = st.number_input("FM — Gordura (kg)",    min_value=0.0, step=0.1, key="reg_massa_gordura")
-        massa_livre_gordura = st.number_input("FFM — Magra (kg)",     min_value=0.0, step=0.1, key="reg_massa_livre_gordura")
-    with cc2:
-        bf_bio = st.number_input("BF% Bioimpedância",  min_value=0.0, max_value=60.0, step=0.1, key="reg_bf_bioimpedancia",
-            help="Valor direto do aparelho.")
-        from calculos_fisio import FORMULAS_DOBRAS
-        opcoes_f  = [(fid, fi["nome"]) for fid, fi in FORMULAS_DOBRAS.items()
-                     if fi.get("campos_masc" if sexo=="Masculino" else "campos_fem")]
-        labels_f  = [v for _, v in opcoes_f]; ids_f = [k for k, _ in opcoes_f]
-        cur_f     = st.session_state.get("reg_bf_formula_sel", "jp7")
-        idx_f     = ids_f.index(cur_f) if cur_f in ids_f else 0
-        formula_lbl = st.selectbox("Fórmula dobras", labels_f, index=idx_f, key="reg_bf_formula_sel")
-        formula_id  = ids_f[labels_f.index(formula_lbl)]
-        bf_calc_input = st.number_input("BF% Dobras (calculado)", min_value=0.0, max_value=60.0, step=0.1,
-            key="reg_bf_calculado", help="Calculado automaticamente se dobras preenchidas.")
-    with cc3:
-        bf_final_input = st.number_input("BF% Final (para cálculos)", min_value=0.0, max_value=60.0, step=0.1,
-            key="reg_bf_final", help="0 = média automática Bio+Dobras.")
-        st.markdown("**BIA Avançada**")
-        st.caption("R, Xc e ângulo de fase — InBody / Tanita profissional.")
-        resistencia = st.number_input("Resistência R (Ω)",  min_value=0.0, step=1.0,  key="reg_resistencia")
-        reactancia  = st.number_input("Reactância Xc (Ω)", min_value=0.0, step=0.5,  key="reg_reactancia")
-        angulo_fase = st.number_input("Ângulo de Fase (°)", min_value=0.0, max_value=20.0, step=0.1, key="reg_angulo_fase",
-            help="Atletas: 7–12°. Bodybuilder show-day: 9.6–11.2°.")
-
-    st.markdown("**💧 Água Corporal**")
-    st.caption("TBW = ICW + ECW. Peak Week: ICW/ECW ≥ 1.90. *(Ribas et al., 2022)*")
-    cw1, cw2, cw3 = st.columns(3)
-    agua_total = cw1.number_input("TBW — Total (L)",        min_value=0.0, step=0.1, key="reg_agua_total")
-    agua_intra = cw2.number_input("ICW — Intracelular (L)", min_value=0.0, step=0.1, key="reg_agua_intracelular")
-    agua_extra = cw3.number_input("ECW — Extracelular (L)", min_value=0.0, step=0.1, key="reg_agua_extracelular")
-    if agua_intra > 0 and agua_extra > 0:
-        ratio_icw = round(agua_intra / agua_extra, 3)
-        cor_r = "🟢" if ratio_icw >= 1.90 else ("🟡" if ratio_icw >= 1.60 else "🔴")
-        st.caption(f"{cor_r} ICW/ECW: **{ratio_icw}** (alvo show-day ≥ 1.90)")
-
-    # ═══════════════════════════════════════════════════════════════════════
-    # GRUPO 2 — RECUPERAÇÃO
-    # ═══════════════════════════════════════════════════════════════════════
-    st.divider()
-    g2h, g2b = st.columns([4, 1])
-    g2h.markdown("#### 🎯 Dados de Recuperação")
-    if g2b.button("📋 Último registro", key="fill_rec", use_container_width=True):
-        st.session_state["_reg_pending"] = carregar_ultimo_registro()
-        st.rerun()
-
-    rc1, rc2, rc3 = st.columns(3)
-    carga_treino  = rc1.number_input("Volume Load (kg×reps)", min_value=0.0, step=10.0, key="reg_carga_treino")
-    vfc_noturna   = rc1.number_input("VFC Noturna (ms)",      min_value=0.0, step=1.0,  key="reg_vfc_noturna")
-    sleep_score   = rc2.number_input("Sleep Score (0–100)",   min_value=0, max_value=100, step=1, key="reg_sleep_score")
-    recovery_time = rc2.number_input("Recovery Time (h)",     min_value=0, step=1, key="reg_recovery_time")
-    fc_repouso    = rc3.number_input("FC Repouso (bpm)",      min_value=0, step=1, key="reg_fc_repouso")
-
-    # ═══════════════════════════════════════════════════════════════════════
-    # GRUPO 3 — DOBRAS CUTÂNEAS
-    # ═══════════════════════════════════════════════════════════════════════
-    st.divider()
-    g3h, g3b = st.columns([4, 1])
-    g3h.markdown("#### 🔬 Dobras Cutâneas (mm)")
-    g3h.caption("Plicômetro, lado direito. Todos opcionais.")
-    if g3b.button("📋 Último registro", key="fill_dob", use_container_width=True):
-        st.session_state["_reg_pending"] = carregar_ultimo_registro()
-        st.rerun()
-
-    db1, db2, db3, db4 = st.columns(4)
-    campos_dobras = [
-        ("dobra_peitoral","Peitoral",db1),("dobra_axilar","Axilar",db2),
-        ("dobra_tricipital","Tricipital",db3),("dobra_subescapular","Subescapular",db4),
-        ("dobra_abdominal","Abdominal",db1),("dobra_suprailiaca","Suprailiaca",db2),
-        ("dobra_coxa","Coxa",db3),("dobra_bicipital","Bíceps (Durnin)",db4),
-    ]
-    dobras_vals = {}
-    for campo, label, col in campos_dobras:
-        with col:
-            dobras_vals[campo] = st.number_input(label, min_value=0.0, step=0.5, key=f"reg_{campo}")
-
-    bf_calculado = None
-    if any(v > 0 for v in dobras_vals.values()):
-        from calculos_fisio import calcular_bf_por_formula, sugerir_formula_dobras
-        sugerida_id, sugerida_just = sugerir_formula_dobras(dobras_vals, sexo, bf_bio or 15.0)
-        if formula_id != sugerida_id:
-            st.caption(f"💡 Sugestão: **{FORMULAS_DOBRAS.get(sugerida_id,{}).get('nome','')}** — {sugerida_just}")
-        bf_calculado = calcular_bf_por_formula(formula_id, dobras_vals, idade, sexo)
-        if bf_calculado:
-            peso_v = float(st.session_state.get("reg_peso") or 0)
-            fm_  = round(peso_v * bf_calculado/100, 1) if peso_v > 0 else "—"
-            ffm_ = round(peso_v * (1 - bf_calculado/100), 1) if peso_v > 0 else "—"
-            st.success(f"✅ BF% ({formula_lbl}): **{bf_calculado}%** | FM: {fm_} kg | FFM: {ffm_} kg")
-
-    # ═══════════════════════════════════════════════════════════════════════
-    # GRUPO 4 — CIRCUNFERÊNCIAS
-    # ═══════════════════════════════════════════════════════════════════════
-    st.divider()
-    g4h, g4b = st.columns([4, 1])
-    g4h.markdown("#### 📐 Circunferências (cm)")
-    if g4b.button("📋 Último registro", key="fill_circ", use_container_width=True):
-        st.session_state["_reg_pending"] = carregar_ultimo_registro()
-        st.rerun()
-
-    ci1, ci2, ci3, ci4 = st.columns(4)
-    campos_circ = [
-        ("cintura","Cintura",ci1),("ombros","Ombros",ci2),
-        ("peito","Peito",ci3),("quadril","Quadril",ci4),
-        ("biceps_d","Bíceps D",ci1),("coxa_d","Coxa D",ci2),
-        ("panturrilha_d","Panturrilha D",ci3),("pescoco","Pescoço",ci4),
-    ]
-    circ_vals = {}
-    for campo, label, col in campos_circ:
-        with col:
-            circ_vals[campo] = st.number_input(label, min_value=0.0, step=0.5, key=f"reg_{campo}")
-
-    # ─── Notas ───────────────────────────────────────────────────────────────
-    st.divider()
-    notas = st.text_area("📝 Notas", height=70, key="reg_notas")
-
-    # ─── BF% final ───────────────────────────────────────────────────────────
-    bf_calc_save = bf_calculado or (bf_calc_input if bf_calc_input > 0 else None)
-    def _bf_auto():
-        vals = [v for v in [bf_bio if bf_bio > 0 else None, bf_calc_save] if v]
-        return round(sum(vals)/len(vals), 1) if vals else None
-    bf_final_save = bf_final_input if bf_final_input > 0 else _bf_auto()
-
-    payload = {
-        "data":  str(data_reg),
-        "hora_registro":       hora_reg or None,
-        "peso":                float(peso)                  if peso > 0                 else None,
-        "bf_bioimpedancia":    float(bf_bio)                if bf_bio > 0               else None,
-        "bf_formula":          formula_id                   if bf_calc_save             else None,
-        "bf_calculado":        float(bf_calc_save)          if bf_calc_save             else None,
-        "bf_final":            float(bf_final_save)         if bf_final_save            else None,
-        "massa_gordura":       float(massa_gordura)         if massa_gordura > 0        else None,
-        "massa_livre_gordura": float(massa_livre_gordura)   if massa_livre_gordura > 0  else None,
-        "agua_total":          float(agua_total)            if agua_total > 0           else None,
-        "agua_intracelular":   float(agua_intra)            if agua_intra > 0           else None,
-        "agua_extracelular":   float(agua_extra)            if agua_extra > 0           else None,
-        "angulo_fase":         float(angulo_fase)           if angulo_fase > 0          else None,
-        "resistencia":         float(resistencia)           if resistencia > 0          else None,
-        "reactancia":          float(reactancia)            if reactancia > 0           else None,
-        "carga_treino":        float(carga_treino)          if carga_treino > 0         else None,
-        "vfc_noturna":         float(vfc_noturna)           if vfc_noturna > 0          else None,
-        "sleep_score":         int(sleep_score)             if sleep_score > 0          else None,
-        "recovery_time":       int(recovery_time)           if recovery_time > 0        else None,
-        "fc_repouso":          int(fc_repouso)              if fc_repouso > 0           else None,
-        **{k: (float(v) if v > 0 else None) for k, v in dobras_vals.items()},
-        **{k: (float(v) if v > 0 else None) for k, v in circ_vals.items()},
-        "notas": notas or None,
-    }
-
-    # ─── Botões ───────────────────────────────────────────────────────────────
-    st.divider()
-    col_save, col_novo, col_cancel = st.columns([2, 1, 1])
-    btn_label = "💾 Atualizar Registro" if is_edicao else "💾 Salvar Novo Registro"
-
-    with col_save:
-        if st.button(btn_label, type="primary", use_container_width=True, key="btn_salvar_reg"):
+    with st.form("reg_form", border=True):
+        # ── DATA E HORA ──────────────────────────────────────────────────────
+        st.markdown("#### 📅 Data e Hora")
+        col_d, col_h = st.columns(2)
+        with col_d:
             if is_edicao:
-                atualizar_registro(str(editando["id"]), payload)
+                data_default = datetime.strptime(
+                    str(editando.get("data", now.strftime("%Y-%m-%d"))), "%Y-%m-%d"
+                ).date()
             else:
-                salvar_novo_registro(payload)
+                data_default = now.date()
+            data_reg = st.date_input("Data", value=data_default, key=f"reg_data_{_rec_key}")
+        with col_h:
+            hora_reg = st.text_input("Hora (HH:MM)", key="reg_hora")
+
+        # ══ GRUPO 1 — COMPOSIÇÃO CORPORAL ════════════════════════════════════
+        st.divider()
+        st.markdown("#### ⚖️ Composição Corporal")
+        st.caption("Dados diretos da balança de bioimpedância ou calculados por dobras.")
+
+        cc1, cc2, cc3 = st.columns(3)
+        with cc1:
+            peso                = st.number_input("Peso (kg)",         min_value=0.0, max_value=300.0, step=0.05, format="%.2f", key="reg_peso")
+            massa_gordura       = st.number_input("FM — Gordura (kg)", min_value=0.0, step=0.1, key="reg_massa_gordura")
+            massa_livre_gordura = st.number_input("FFM — Magra (kg)",  min_value=0.0, step=0.1, key="reg_massa_livre_gordura")
+        with cc2:
+            bf_bio = st.number_input("BF% Bioimpedância", min_value=0.0, max_value=60.0, step=0.1,
+                key="reg_bf_bioimpedancia", help="Valor direto do aparelho.")
+            from calculos_fisio import FORMULAS_DOBRAS
+            opcoes_f  = [(fid, fi["nome"]) for fid, fi in FORMULAS_DOBRAS.items()
+                         if fi.get("campos_masc" if sexo=="Masculino" else "campos_fem")]
+            labels_f  = [v for _, v in opcoes_f]; ids_f = [k for k, _ in opcoes_f]
+            cur_f     = st.session_state.get("reg_bf_formula_sel", "jp7")
+            idx_f     = ids_f.index(cur_f) if cur_f in ids_f else 0
+            formula_lbl = st.selectbox("Fórmula dobras", labels_f, index=idx_f, key="reg_bf_formula_sel")
+            formula_id  = ids_f[labels_f.index(formula_lbl)]
+            bf_calc_input = st.number_input("BF% Dobras (calculado)", min_value=0.0, max_value=60.0, step=0.1,
+                key="reg_bf_calculado", help="Calculado automaticamente ao salvar se dobras preenchidas.")
+        with cc3:
+            bf_final_input = st.number_input("BF% Final (para cálculos)", min_value=0.0, max_value=60.0, step=0.1,
+                key="reg_bf_final", help="0 = média automática Bio+Dobras.")
+            st.markdown("**BIA Avançada**")
+            st.caption("R, Xc e ângulo de fase — InBody / Tanita profissional.")
+            resistencia = st.number_input("Resistência R (Ω)",  min_value=0.0, step=1.0,  key="reg_resistencia")
+            reactancia  = st.number_input("Reactância Xc (Ω)", min_value=0.0, step=0.5,  key="reg_reactancia")
+            angulo_fase = st.number_input("Ângulo de Fase (°)", min_value=0.0, max_value=20.0, step=0.1,
+                key="reg_angulo_fase", help="Atletas: 7–12°. Bodybuilder show-day: 9.6–11.2°.")
+
+        st.markdown("**💧 Água Corporal**")
+        st.caption("TBW = ICW + ECW. Peak Week: ICW/ECW ≥ 1.90. *(Ribas et al., 2022)*")
+        cw1, cw2, cw3 = st.columns(3)
+        agua_total = cw1.number_input("TBW — Total (L)",        min_value=0.0, step=0.1, key="reg_agua_total")
+        agua_intra = cw2.number_input("ICW — Intracelular (L)", min_value=0.0, step=0.1, key="reg_agua_intracelular")
+        agua_extra = cw3.number_input("ECW — Extracelular (L)", min_value=0.0, step=0.1, key="reg_agua_extracelular")
+
+        # ══ GRUPO 2 — RECUPERAÇÃO ════════════════════════════════════════════
+        st.divider()
+        st.markdown("#### 🎯 Dados de Recuperação")
+        rc1, rc2, rc3 = st.columns(3)
+        carga_treino  = rc1.number_input("Volume Load (kg×reps)", min_value=0.0, step=10.0, key="reg_carga_treino")
+        vfc_noturna   = rc1.number_input("VFC Noturna (ms)",      min_value=0.0, step=1.0,  key="reg_vfc_noturna")
+        sleep_score   = rc2.number_input("Sleep Score (0–100)",   min_value=0, max_value=100, step=1, key="reg_sleep_score")
+        recovery_time = rc2.number_input("Recovery Time (h)",     min_value=0, step=1, key="reg_recovery_time")
+        fc_repouso    = rc3.number_input("FC Repouso (bpm)",      min_value=0, step=1, key="reg_fc_repouso")
+
+        # ══ GRUPO 3 — DOBRAS CUTÂNEAS ════════════════════════════════════════
+        st.divider()
+        st.markdown("#### 🔬 Dobras Cutâneas (mm)")
+        st.caption("Plicômetro, lado direito. Todos opcionais. BF% calculado ao salvar.")
+        db1, db2, db3, db4 = st.columns(4)
+        campos_dobras = [
+            ("dobra_peitoral","Peitoral",db1),("dobra_axilar","Axilar",db2),
+            ("dobra_tricipital","Tricipital",db3),("dobra_subescapular","Subescapular",db4),
+            ("dobra_abdominal","Abdominal",db1),("dobra_suprailiaca","Suprailiaca",db2),
+            ("dobra_coxa","Coxa",db3),("dobra_bicipital","Bíceps (Durnin)",db4),
+        ]
+        dobras_vals = {}
+        for campo, label, col in campos_dobras:
+            with col:
+                dobras_vals[campo] = st.number_input(label, min_value=0.0, step=0.5, key=f"reg_{campo}")
+
+        # ══ GRUPO 4 — CIRCUNFERÊNCIAS ════════════════════════════════════════
+        st.divider()
+        st.markdown("#### 📐 Circunferências (cm)")
+        ci1, ci2, ci3, ci4 = st.columns(4)
+        campos_circ = [
+            ("cintura","Cintura",ci1),("ombros","Ombros",ci2),
+            ("peito","Peito",ci3),("quadril","Quadril",ci4),
+            ("biceps_d","Bíceps D",ci1),("coxa_d","Coxa D",ci2),
+            ("panturrilha_d","Panturrilha D",ci3),("pescoco","Pescoço",ci4),
+        ]
+        circ_vals = {}
+        for campo, label, col in campos_circ:
+            with col:
+                circ_vals[campo] = st.number_input(label, min_value=0.0, step=0.5, key=f"reg_{campo}")
+
+        # ── Notas ─────────────────────────────────────────────────────────────
+        st.divider()
+        notas = st.text_area("📝 Notas", height=70, key="reg_notas")
+
+        # ── Botão Salvar (dentro do form — único evento que dispara rerun) ────
+        st.divider()
+        btn_label = "💾 Atualizar Registro" if is_edicao else "💾 Salvar Novo Registro"
+        submitted = st.form_submit_button(btn_label, type="primary", use_container_width=True)
+
+    # ─── Processamento após submit ────────────────────────────────────────────
+    if submitted:
+        # BF% calculado por dobras (executa após submit, não em tempo real)
+        bf_calculado = None
+        if any(v > 0 for v in dobras_vals.values()):
+            from calculos_fisio import calcular_bf_por_formula, sugerir_formula_dobras
+            sugerida_id, sugerida_just = sugerir_formula_dobras(dobras_vals, sexo, bf_bio or 15.0)
+            if formula_id != sugerida_id:
+                st.caption(f"💡 Fórmula sugerida: **{FORMULAS_DOBRAS.get(sugerida_id,{}).get('nome','')}** — {sugerida_just}")
+            bf_calculado = calcular_bf_por_formula(formula_id, dobras_vals, idade, sexo)
+            if bf_calculado:
+                peso_v = float(peso or 0)
+                fm_  = round(peso_v * bf_calculado/100, 1) if peso_v > 0 else "—"
+                ffm_ = round(peso_v * (1 - bf_calculado/100), 1) if peso_v > 0 else "—"
+                st.success(f"✅ BF% ({formula_lbl}): **{bf_calculado}%** | FM: {fm_} kg | FFM: {ffm_} kg")
+
+        # ICW/ECW ratio display
+        if agua_intra > 0 and agua_extra > 0:
+            ratio_icw = round(agua_intra / agua_extra, 3)
+            cor_r = "🟢" if ratio_icw >= 1.90 else ("🟡" if ratio_icw >= 1.60 else "🔴")
+            st.caption(f"{cor_r} ICW/ECW: **{ratio_icw}** (alvo show-day ≥ 1.90)")
+
+        bf_calc_save = bf_calculado or (bf_calc_input if bf_calc_input > 0 else None)
+        def _bf_auto():
+            vals = [v for v in [bf_bio if bf_bio > 0 else None, bf_calc_save] if v]
+            return round(sum(vals)/len(vals), 1) if vals else None
+        bf_final_save = bf_final_input if bf_final_input > 0 else _bf_auto()
+
+        payload = {
+            "data":                str(data_reg),
+            "hora_registro":       hora_reg or None,
+            "peso":                float(peso)                  if peso > 0                 else None,
+            "bf_bioimpedancia":    float(bf_bio)                if bf_bio > 0               else None,
+            "bf_formula":          formula_id                   if bf_calc_save             else None,
+            "bf_calculado":        float(bf_calc_save)          if bf_calc_save             else None,
+            "bf_final":            float(bf_final_save)         if bf_final_save            else None,
+            "massa_gordura":       float(massa_gordura)         if massa_gordura > 0        else None,
+            "massa_livre_gordura": float(massa_livre_gordura)   if massa_livre_gordura > 0  else None,
+            "agua_total":          float(agua_total)            if agua_total > 0           else None,
+            "agua_intracelular":   float(agua_intra)            if agua_intra > 0           else None,
+            "agua_extracelular":   float(agua_extra)            if agua_extra > 0           else None,
+            "angulo_fase":         float(angulo_fase)           if angulo_fase > 0          else None,
+            "resistencia":         float(resistencia)           if resistencia > 0          else None,
+            "reactancia":          float(reactancia)            if reactancia > 0           else None,
+            "carga_treino":        float(carga_treino)          if carga_treino > 0         else None,
+            "vfc_noturna":         float(vfc_noturna)           if vfc_noturna > 0          else None,
+            "sleep_score":         int(sleep_score)             if sleep_score > 0          else None,
+            "recovery_time":       int(recovery_time)           if recovery_time > 0        else None,
+            "fc_repouso":          int(fc_repouso)              if fc_repouso > 0           else None,
+            **{k: (float(v) if v > 0 else None) for k, v in dobras_vals.items()},
+            **{k: (float(v) if v > 0 else None) for k, v in circ_vals.items()},
+            "notas": notas or None,
+        }
+
+        if is_edicao:
+            atualizar_registro(str(editando["id"]), payload)
+        else:
+            salvar_novo_registro(payload)
+        st.session_state["reg_editando"] = None
+        st.session_state["_reg_pending"] = None
+        st.rerun()
+
+    # ─── Cancelar / Limpar — fora do form ────────────────────────────────────
+    if is_edicao:
+        col_cancel, col_clear, _ = st.columns([1, 1, 2])
+        if col_cancel.button("✖ Cancelar edição", use_container_width=True, key="btn_cancel_edit"):
             st.session_state["reg_editando"] = None
             st.session_state["_reg_pending"] = None
             st.rerun()
-
-    if is_edicao:
-        with col_novo:
-            if st.button("✖ Cancelar", use_container_width=True, key="btn_cancel_edit"):
-                st.session_state["reg_editando"] = None
-                st.session_state["_reg_pending"] = None
-                st.rerun()
-
-    with col_cancel:
-        if st.button("🔄 Limpar formulário", use_container_width=True, key="btn_clear"):
+        if col_clear.button("🔄 Limpar formulário", use_container_width=True, key="btn_clear"):
+            st.session_state["reg_editando"] = None
+            st.session_state["_reg_pending"] = None
+            st.rerun()
+    else:
+        _, col_clear = st.columns([3, 1])
+        if col_clear.button("🔄 Limpar formulário", use_container_width=True, key="btn_clear"):
             st.session_state["reg_editando"] = None
             st.session_state["_reg_pending"] = None
             st.rerun()
@@ -2140,7 +2631,6 @@ def render_app():
         "🎯 Recuperação",
         "📁 Registros",
         "📊 Avaliação Semanal",
-        "💊 Suplementação",
         "📈 Evolução",
         "👤 Perfil",
         "📚 Referências",
@@ -2153,10 +2643,9 @@ def render_app():
     with tabs[4]:  tab_recuperacao(atleta, df_historico, p)
     with tabs[5]:  tab_registros(p, atleta, perfil)
     with tabs[6]:  tab_avaliacao_semanal(atleta, df_historico, fase)
-    with tabs[7]:  tab_suplementacao(atleta)
-    with tabs[8]:  tab_evolucao(df_historico)
-    with tabs[9]:  tab_perfil(perfil)
-    with tabs[10]: tab_referencias()
+    with tabs[7]:  tab_evolucao(df_historico)
+    with tabs[8]:  tab_perfil(perfil)
+    with tabs[9]:  tab_referencias()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
