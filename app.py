@@ -763,32 +763,33 @@ def tab_periodizacao(fase, df_timeline, flags, p, atleta, df_hist):
                 st.error(f"Erro ao ler CSV: {_ep}")
 
     # ── Editor de periodização manual ─────────────────────────────────────
-    st.markdown(
-        "**✏️ Fases manuais** — clique em uma célula para editar. "
-        "Datas no formato `AAAA-MM-DD`."
-    )
+    st.caption("💡 Pressione **Enter** para confirmar cada célula. Datas no formato `AAAA-MM-DD`.")
     _dfp_edit = st.data_editor(
         st.session_state["periodizacao_manual_df"],
         num_rows="dynamic",
         use_container_width=True,
         key="periodizacao_manual_editor",
+        hide_index=True,
         column_config={
-            "Fase":     st.column_config.TextColumn("Fase",    help="Ex: Cutting"),
-            "Inicio":   st.column_config.TextColumn("Início",  help="AAAA-MM-DD"),
-            "Fim":      st.column_config.TextColumn("Fim",     help="AAAA-MM-DD"),
-            "Objetivo": st.column_config.TextColumn("Objetivo"),
-            "Notas":    st.column_config.TextColumn("Notas"),
+            "Fase":     st.column_config.TextColumn("Fase",    default="", help="Ex: Cutting"),
+            "Inicio":   st.column_config.TextColumn("Início",  default="", help="AAAA-MM-DD"),
+            "Fim":      st.column_config.TextColumn("Fim",     default="", help="AAAA-MM-DD"),
+            "Objetivo": st.column_config.TextColumn("Objetivo",default=""),
+            "Notas":    st.column_config.TextColumn("Notas",   default=""),
         },
     )
-    st.session_state["periodizacao_manual_df"] = _normalizar_df_period(_dfp_edit)
 
     # ── Botões Salvar / Limpar ────────────────────────────────────────────
     _pp1, _pp2, _pp3 = st.columns([2, 1, 1])
     if _pp1.button("💾 Salvar periodização manual no banco", key="btn_salvar_period_manual",
                    type="primary", use_container_width=True):
         salvar_periodizacao_manual(_dfp_edit)
+        st.session_state["periodizacao_manual_df"] = _normalizar_df_period(_dfp_edit)
+        st.session_state.pop("periodizacao_manual_editor", None)
+        st.rerun()
     if _pp3.button("🗑️ Limpar", key="btn_limpar_period_manual", use_container_width=True):
-        st.session_state["periodizacao_manual_df"] = pd.DataFrame(columns=_COLUNAS_PERIOD)
+        st.session_state["periodizacao_manual_df"] = _normalizar_df_period(pd.DataFrame(columns=_COLUNAS_PERIOD))
+        st.session_state.pop("periodizacao_manual_editor", None)
         salvar_periodizacao_manual(pd.DataFrame(columns=_COLUNAS_PERIOD))
         st.rerun()
 
@@ -970,46 +971,48 @@ def tab_nutricao(fase, atleta, df_hist, flags, df_dieta, motivo_dieta, alertas, 
     # Garantir tipos corretos antes de passar ao editor
     st.session_state[_cache_key] = _normalizar_df_dieta(st.session_state[_cache_key])
 
-    st.markdown("**✏️ Editar dieta** — clique em uma célula para editar:")
+    st.caption("💡 Pressione **Enter** para confirmar cada célula antes de passar para a próxima.")
     _df_dieta_edit = st.data_editor(
         st.session_state[_cache_key],
         num_rows="dynamic",
         use_container_width=True,
         key="dieta_manual_editor",
+        hide_index=True,
         column_config={
-            "Refeição":    st.column_config.TextColumn("Refeição",   help="Ex: Café da manhã"),
-            "Alimento":    st.column_config.TextColumn("Alimento",   help="Ex: Frango grelhado"),
-            "Qtd":         st.column_config.TextColumn("Qtd",        help="Ex: 200g ou 1 unidade"),
-            "Calorias":    st.column_config.NumberColumn("Calorias", min_value=0, format="%d"),
-            "Proteína(g)": st.column_config.NumberColumn("Prot(g)",  min_value=0, format="%.1f"),
-            "Carb(g)":     st.column_config.NumberColumn("Carb(g)",  min_value=0, format="%.1f"),
-            "Gordura(g)":  st.column_config.NumberColumn("Gord(g)",  min_value=0, format="%.1f"),
-            "Notas":       st.column_config.TextColumn("Notas"),
+            "Refeição":    st.column_config.TextColumn("Refeição",    default="", help="Ex: Café da manhã"),
+            "Alimento":    st.column_config.TextColumn("Alimento",    default="", help="Ex: Frango grelhado"),
+            "Qtd":         st.column_config.TextColumn("Qtd",         default="", help="Ex: 200g"),
+            "Calorias":    st.column_config.NumberColumn("Calorias",  default=None, min_value=0, format="%d"),
+            "Proteína(g)": st.column_config.NumberColumn("Prot(g)",   default=None, min_value=0, format="%.1f"),
+            "Carb(g)":     st.column_config.NumberColumn("Carb(g)",   default=None, min_value=0, format="%.1f"),
+            "Gordura(g)":  st.column_config.NumberColumn("Gord(g)",   default=None, min_value=0, format="%.1f"),
+            "Notas":       st.column_config.TextColumn("Notas",       default=""),
         },
     )
-    st.session_state[_cache_key] = _normalizar_df_dieta(_df_dieta_edit)
 
     # ── Totais automáticos ────────────────────────────────────────────────
     _cols_num = ["Calorias","Proteína(g)","Carb(g)","Gordura(g)"]
     if not _df_dieta_edit.empty:
-        _totais = {}
-        for _c in _cols_num:
-            if _c in _df_dieta_edit.columns:
-                _totais[_c] = pd.to_numeric(_df_dieta_edit[_c], errors="coerce").sum()
+        _totais = {_c: pd.to_numeric(_df_dieta_edit.get(_c, pd.Series()), errors="coerce").sum()
+                   for _c in _cols_num}
         if any(v > 0 for v in _totais.values()):
             _t1, _t2, _t3, _t4 = st.columns(4)
-            _t1.metric("Total kcal",    f"{_totais.get('Calorias',0):.0f}")
-            _t2.metric("Proteína",      f"{_totais.get('Proteína(g)',0):.1f}g")
-            _t3.metric("Carb",          f"{_totais.get('Carb(g)',0):.1f}g")
-            _t4.metric("Gordura",       f"{_totais.get('Gordura(g)',0):.1f}g")
+            _t1.metric("Total kcal", f"{_totais.get('Calorias',0):.0f}")
+            _t2.metric("Proteína",   f"{_totais.get('Proteína(g)',0):.1f}g")
+            _t3.metric("Carb",       f"{_totais.get('Carb(g)',0):.1f}g")
+            _t4.metric("Gordura",    f"{_totais.get('Gordura(g)',0):.1f}g")
 
     # ── Botões Salvar / Limpar / Export ───────────────────────────────────
     _db1, _db2, _db3 = st.columns([2, 1, 1])
     if _db1.button("💾 Salvar dieta manual no banco", key="btn_salvar_dieta_manual",
                    type="primary", use_container_width=True):
         salvar_dieta_manual(_df_dieta_edit, _data_ref_str)
+        st.session_state[_cache_key] = _normalizar_df_dieta(_df_dieta_edit)
+        st.session_state.pop("dieta_manual_editor", None)
+        st.rerun()
     if _db3.button("🗑️ Limpar", key="btn_limpar_dieta_manual", use_container_width=True):
-        st.session_state[_cache_key] = pd.DataFrame(columns=_COLUNAS_DIETA)
+        st.session_state[_cache_key] = _normalizar_df_dieta(pd.DataFrame(columns=_COLUNAS_DIETA))
+        st.session_state.pop("dieta_manual_editor", None)
         salvar_dieta_manual(pd.DataFrame(columns=_COLUNAS_DIETA), _data_ref_str)
         st.rerun()
 
@@ -1335,28 +1338,38 @@ def tab_treino(fase, atleta, df_hist):
                 st.error(f"Erro ao ler CSV: {_e}")
 
     # ── Editor manual ─────────────────────────────────────────────────────
-    st.markdown("**✏️ Editar treino manual** — clique em uma célula para editar:")
+    # PADRÃO CORRETO:
+    # - NÃO atualizar o session_state base a cada rerun (causaria double-apply
+    #   do delta interno do editor → linhas sumindo/duplicando).
+    # - O editor guarda seu próprio delta em session_state["treino_manual_editor"].
+    # - Só atualizamos a base ao clicar Salvar ou Limpar.
+    # - hide_index=True remove o "0" da primeira coluna (era o índice do DF).
+    st.caption("💡 Pressione **Enter** para confirmar cada célula antes de passar para a próxima.")
     _df_edit = st.data_editor(
         st.session_state["treino_manual_df"],
         num_rows="dynamic",
         use_container_width=True,
         key="treino_manual_editor",
-        column_config={c: st.column_config.TextColumn(c) for c in _COLUNAS_TREINO},
+        hide_index=True,
+        column_config={c: st.column_config.TextColumn(c, default="") for c in _COLUNAS_TREINO},
     )
-    # Garante persistência também pelo retorno direto do editor
-    _df_norm_t = _df_edit.copy()
-    for c in _COLUNAS_TREINO:
-        if c not in _df_norm_t.columns:
-            _df_norm_t[c] = ""
-    st.session_state["treino_manual_df"] = _df_norm_t[_COLUNAS_TREINO].fillna("").astype(str)
 
     # ── Botões Salvar / Limpar ────────────────────────────────────────────
     _bm1, _bm2, _bm3 = st.columns([2, 1, 1])
     if _bm1.button("💾 Salvar treino manual no banco", key="btn_salvar_treino_manual",
                    type="primary", use_container_width=True):
         salvar_treino_manual(_df_edit)
+        # Atualiza a base e limpa o delta do editor para evitar double-apply
+        _df_norm_t = _df_edit.copy()
+        for _c in _COLUNAS_TREINO:
+            if _c not in _df_norm_t.columns:
+                _df_norm_t[_c] = ""
+        st.session_state["treino_manual_df"] = _df_norm_t[_COLUNAS_TREINO].fillna("").astype(str)
+        st.session_state.pop("treino_manual_editor", None)
+        st.rerun()
     if _bm3.button("🗑️ Limpar", key="btn_limpar_treino_manual", use_container_width=True):
         st.session_state["treino_manual_df"] = pd.DataFrame(columns=_COLUNAS_TREINO)
+        st.session_state.pop("treino_manual_editor", None)
         salvar_treino_manual(pd.DataFrame(columns=_COLUNAS_TREINO))
         st.rerun()
 
