@@ -714,24 +714,26 @@ def tab_periodizacao(fase, df_timeline, flags, p, atleta, df_hist):
     _COLUNAS_PERIOD = ["Fase", "Inicio", "Fim", "Objetivo", "Notas"]
 
     def _normalizar_df_period(df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Garante que o DataFrame de periodização manual tenha todas as colunas
-        esperadas e que Inicio/Fim sejam dtype datetime64[ns] (exigido pelo
-        st.column_config.DateColumn). Linhas com datas inválidas ficam NaT.
-        """
+        """Garante colunas corretas e converte datas para string YYYY-MM-DD."""
         for c in _COLUNAS_PERIOD:
             if c not in df.columns:
-                df[c] = None
+                df[c] = ""
         df = df[_COLUNAS_PERIOD].copy()
+        # Manter Inicio/Fim como string simples — evita todos os problemas de
+        # compatibilidade de tipo com st.column_config.DateColumn
         for _dc in ("Inicio", "Fim"):
-            df[_dc] = pd.to_datetime(df[_dc], errors="coerce")
+            df[_dc] = pd.to_datetime(df[_dc], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+        # Demais colunas: garantir string, nunca NaN/None
+        for c in ("Fase", "Objetivo", "Notas"):
+            df[c] = df[c].fillna("").astype(str)
         return df
 
-    # Carregar do Supabase na primeira vez
+    # Carregar do Supabase na primeira vez por sessão
     if "periodizacao_manual_df" not in st.session_state:
         raw_p = carregar_periodizacao_manual()
         if not raw_p.empty:
-            col_map_p = {"fase":"Fase","inicio":"Inicio","fim":"Fim","objetivo":"Objetivo","notas":"Notas"}
+            col_map_p = {"fase":"Fase","inicio":"Inicio","fim":"Fim",
+                         "objetivo":"Objetivo","notas":"Notas"}
             raw_p = raw_p.drop(columns=["id"], errors="ignore").rename(columns=col_map_p)
         else:
             raw_p = pd.DataFrame(columns=_COLUNAS_PERIOD)
@@ -750,7 +752,8 @@ def tab_periodizacao(fase, df_timeline, flags, p, atleta, df_hist):
         _pf = st.file_uploader("Selecione o arquivo .csv", type=["csv"], key="period_csv_upload")
         if _pf is not None:
             try:
-                _dfp = pd.read_csv(_pf, sep=None, engine="python", header=0 if _ph else None)
+                _dfp = pd.read_csv(_pf, sep=None, engine="python",
+                                   header=0 if _ph else None, dtype=str)
                 if not _ph:
                     n = min(len(_COLUNAS_PERIOD), len(_dfp.columns))
                     _dfp.columns = list(_COLUNAS_PERIOD[:n]) + list(_dfp.columns[n:])
@@ -760,21 +763,38 @@ def tab_periodizacao(fase, df_timeline, flags, p, atleta, df_hist):
                 st.error(f"Erro ao ler CSV: {_ep}")
 
     # ── Editor de periodização manual ─────────────────────────────────────
-    st.markdown("**✏️ Fases manuais (clique nas células para editar):**")
+    # Todas as colunas como TextColumn — solução robusta independente de versão
+    # do Streamlit. O st.data_editor salva na callback on_change para evitar
+    # que valores sumam ao navegar entre células.
+    def _on_change_period():
+        edited = st.session_state.get("periodizacao_manual_editor")
+        if edited is not None:
+            st.session_state["periodizacao_manual_df"] = _normalizar_df_period(
+                pd.DataFrame(edited)
+            )
+
+    st.markdown(
+        "**✏️ Fases manuais** — clique em uma célula para editar. "
+        "Datas no formato `AAAA-MM-DD`."
+    )
     _dfp_edit = st.data_editor(
         st.session_state["periodizacao_manual_df"],
         num_rows="dynamic",
         use_container_width=True,
         key="periodizacao_manual_editor",
+        on_change=_on_change_period,
         column_config={
-            "Fase":     st.column_config.TextColumn("Fase"),
-            "Inicio":   st.column_config.DateColumn("Início"),
-            "Fim":      st.column_config.DateColumn("Fim"),
+            "Fase":     st.column_config.TextColumn("Fase",    help="Ex: Cutting"),
+            "Inicio":   st.column_config.TextColumn("Início",  help="AAAA-MM-DD"),
+            "Fim":      st.column_config.TextColumn("Fim",     help="AAAA-MM-DD"),
             "Objetivo": st.column_config.TextColumn("Objetivo"),
             "Notas":    st.column_config.TextColumn("Notas"),
         },
     )
-    st.session_state["periodizacao_manual_df"] = _dfp_edit
+    # Também persiste o resultado direto do editor (redundante mas seguro)
+    st.session_state["periodizacao_manual_df"] = _normalizar_df_period(
+        _dfp_edit if not _dfp_edit.empty else pd.DataFrame(columns=_COLUNAS_PERIOD)
+    )
 
     # ── Botões Salvar / Limpar ────────────────────────────────────────────
     _pp1, _pp2, _pp3 = st.columns([2, 1, 1])
@@ -947,12 +967,35 @@ def tab_nutricao(fase, atleta, df_hist, flags, df_dieta, motivo_dieta, alertas, 
                 st.error(f"Erro ao ler CSV: {_ed}")
 
     # ── Editor dieta manual ───────────────────────────────────────────────
-    st.markdown("**✏️ Editar dieta (clique nas células para editar):**")
+    _COLS_NUM_DIETA = ["Calorias","Proteína(g)","Carb(g)","Gordura(g)"]
+    _COLS_TXT_DIETA = ["Refeição","Alimento","Qtd","Notas"]
+
+    def _normalizar_df_dieta(df: pd.DataFrame) -> pd.DataFrame:
+        for c in _COLUNAS_DIETA:
+            if c not in df.columns:
+                df[c] = None
+        df = df[_COLUNAS_DIETA].copy()
+        for c in _COLS_TXT_DIETA:
+            df[c] = df[c].fillna("").astype(str)
+        for c in _COLS_NUM_DIETA:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
+
+    def _on_change_dieta():
+        edited_d = st.session_state.get("dieta_manual_editor")
+        if edited_d is not None:
+            st.session_state[_cache_key] = _normalizar_df_dieta(pd.DataFrame(edited_d))
+
+    # Garantir tipos corretos antes de passar ao editor
+    st.session_state[_cache_key] = _normalizar_df_dieta(st.session_state[_cache_key])
+
+    st.markdown("**✏️ Editar dieta** — clique em uma célula para editar:")
     _df_dieta_edit = st.data_editor(
         st.session_state[_cache_key],
         num_rows="dynamic",
         use_container_width=True,
         key="dieta_manual_editor",
+        on_change=_on_change_dieta,
         column_config={
             "Refeição":    st.column_config.TextColumn("Refeição",   help="Ex: Café da manhã"),
             "Alimento":    st.column_config.TextColumn("Alimento",   help="Ex: Frango grelhado"),
@@ -964,7 +1007,7 @@ def tab_nutricao(fase, atleta, df_hist, flags, df_dieta, motivo_dieta, alertas, 
             "Notas":       st.column_config.TextColumn("Notas"),
         },
     )
-    st.session_state[_cache_key] = _df_dieta_edit
+    st.session_state[_cache_key] = _normalizar_df_dieta(_df_dieta_edit)
 
     # ── Totais automáticos ────────────────────────────────────────────────
     _cols_num = ["Calorias","Proteína(g)","Carb(g)","Gordura(g)"]
@@ -1312,15 +1355,31 @@ def tab_treino(fase, atleta, df_hist):
                 st.error(f"Erro ao ler CSV: {_e}")
 
     # ── Editor manual ─────────────────────────────────────────────────────
-    st.markdown("**✏️ Editar treino manual (clique nas células para editar):**")
+    def _on_change_treino():
+        edited_t = st.session_state.get("treino_manual_editor")
+        if edited_t is not None:
+            _df_t = pd.DataFrame(edited_t)
+            for c in _COLUNAS_TREINO:
+                if c not in _df_t.columns:
+                    _df_t[c] = ""
+            _df_t = _df_t[_COLUNAS_TREINO].fillna("").astype(str)
+            st.session_state["treino_manual_df"] = _df_t
+
+    st.markdown("**✏️ Editar treino manual** — clique em uma célula para editar:")
     _df_edit = st.data_editor(
         st.session_state["treino_manual_df"],
         num_rows="dynamic",
         use_container_width=True,
         key="treino_manual_editor",
+        on_change=_on_change_treino,
         column_config={c: st.column_config.TextColumn(c) for c in _COLUNAS_TREINO},
     )
-    st.session_state["treino_manual_df"] = _df_edit
+    # Garante persistência também pelo retorno direto do editor
+    _df_norm_t = _df_edit.copy()
+    for c in _COLUNAS_TREINO:
+        if c not in _df_norm_t.columns:
+            _df_norm_t[c] = ""
+    st.session_state["treino_manual_df"] = _df_norm_t[_COLUNAS_TREINO].fillna("").astype(str)
 
     # ── Botões Salvar / Limpar ────────────────────────────────────────────
     _bm1, _bm2, _bm3 = st.columns([2, 1, 1])
