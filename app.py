@@ -713,15 +713,29 @@ def tab_periodizacao(fase, df_timeline, flags, p, atleta, df_hist):
 
     _COLUNAS_PERIOD = ["Fase", "Inicio", "Fim", "Objetivo", "Notas"]
 
+    def _normalizar_df_period(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Garante que o DataFrame de periodização manual tenha todas as colunas
+        esperadas e que Inicio/Fim sejam dtype datetime64[ns] (exigido pelo
+        st.column_config.DateColumn). Linhas com datas inválidas ficam NaT.
+        """
+        for c in _COLUNAS_PERIOD:
+            if c not in df.columns:
+                df[c] = None
+        df = df[_COLUNAS_PERIOD].copy()
+        for _dc in ("Inicio", "Fim"):
+            df[_dc] = pd.to_datetime(df[_dc], errors="coerce")
+        return df
+
     # Carregar do Supabase na primeira vez
     if "periodizacao_manual_df" not in st.session_state:
         raw_p = carregar_periodizacao_manual()
         if not raw_p.empty:
             col_map_p = {"fase":"Fase","inicio":"Inicio","fim":"Fim","objetivo":"Objetivo","notas":"Notas"}
             raw_p = raw_p.drop(columns=["id"], errors="ignore").rename(columns=col_map_p)
-            st.session_state["periodizacao_manual_df"] = raw_p[[c for c in _COLUNAS_PERIOD if c in raw_p.columns]]
         else:
-            st.session_state["periodizacao_manual_df"] = pd.DataFrame(columns=_COLUNAS_PERIOD)
+            raw_p = pd.DataFrame(columns=_COLUNAS_PERIOD)
+        st.session_state["periodizacao_manual_df"] = _normalizar_df_period(raw_p)
 
     # ── Import CSV de periodização ────────────────────────────────────────
     with st.expander("📂 Importar periodização por CSV"):
@@ -740,8 +754,7 @@ def tab_periodizacao(fase, df_timeline, flags, p, atleta, df_hist):
                 if not _ph:
                     n = min(len(_COLUNAS_PERIOD), len(_dfp.columns))
                     _dfp.columns = list(_COLUNAS_PERIOD[:n]) + list(_dfp.columns[n:])
-                _cols_p = [c for c in _COLUNAS_PERIOD if c in _dfp.columns]
-                st.session_state["periodizacao_manual_df"] = _dfp[_cols_p].copy()
+                st.session_state["periodizacao_manual_df"] = _normalizar_df_period(_dfp)
                 st.success(f"✅ {len(_dfp)} fases importadas.")
             except Exception as _ep:
                 st.error(f"Erro ao ler CSV: {_ep}")
@@ -755,8 +768,8 @@ def tab_periodizacao(fase, df_timeline, flags, p, atleta, df_hist):
         key="periodizacao_manual_editor",
         column_config={
             "Fase":     st.column_config.TextColumn("Fase"),
-            "Inicio":   st.column_config.DateColumn("Início",  format="YYYY-MM-DD"),
-            "Fim":      st.column_config.DateColumn("Fim",     format="YYYY-MM-DD"),
+            "Inicio":   st.column_config.DateColumn("Início"),
+            "Fim":      st.column_config.DateColumn("Fim"),
             "Objetivo": st.column_config.TextColumn("Objetivo"),
             "Notas":    st.column_config.TextColumn("Notas"),
         },
